@@ -1,0 +1,16 @@
+[package]
+name = "ex_cubecl_nif"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Nx backend for CubeCL via Rust NIFs"
+repository = "https://github.com/tracel-ai/cubecl"
+
+[lib]
+name = "ex_cubecl_nif"
+crate-type = ["cdylib"]
+
+[dependencies]
+rustler = "0.37"
+half = "2"
+bytemuck = "1"
