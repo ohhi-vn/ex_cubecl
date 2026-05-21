@@ -36,9 +36,60 @@ defmodule ExCubecl do
     * `{:s, 64}` - 64-bit signed integer
     * `{:u, 32}` - 32-bit unsigned integer
     * `{:u, 8}`  - 8-bit unsigned integer
+
+  ## Mobile (iOS / Android) support
+
+  ExCubecl provides a C FFI layer (`ex_cubecl.h`) for integration with
+  iOS (via Objective-C / Swift bridging) and Android (via JNI).
+  See the header at `native/ex_cubecl_nif/include/ex_cubecl.h`.
   """
 
   alias ExCubecl.Backend, as: B
+
+  @version "0.1.0"
+
+  @doc "Returns the version of ExCubecl."
+  @spec version() :: String.t()
+  def version, do: @version
+
+  @doc """
+  Checks if the NIF library is loaded and available.
+
+  Returns `true` if the NIF can be loaded, `false` otherwise.
+  Useful for graceful fallback when running on platforms without NIF support.
+  """
+  @spec available?() :: boolean()
+  def available? do
+    case ExCubecl.NIF.tensor_shape({:ok, make_ref()}) do
+      {:error, _} -> true
+      _ -> true
+    end
+  rescue
+    _ -> false
+  end
+
+  @doc """
+  Returns information about the compute device/backend.
+
+  Currently returns CPU-based backend info. When CubeCL GPU support is enabled,
+  this will return GPU device information.
+  """
+  @spec device_info() :: map()
+  def device_info do
+    %{
+      backend: :cpu,
+      name: "ExCubecl CPU (Rust NIF)",
+      version: @version,
+      gpu: false,
+      mobile_ffi: true
+    }
+  end
+
+  @doc "Returns the list of supported tensor types."
+  @spec supported_types() :: [tuple()]
+  def supported_types do
+    [{:f, 32}, {:f, 64}, {:s, 32}, {:s, 64}, {:u, 32}, {:u, 8}]
+  end
 
   @doc "Create a tensor from a binary with the given shape and type."
   @spec from_binary(binary(), tuple(), tuple()) :: Nx.Tensor.t()

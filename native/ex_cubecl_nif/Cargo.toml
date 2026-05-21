@@ -8,9 +8,17 @@ repository = "https://github.com/tracel-ai/cubecl"
 
 [lib]
 name = "ex_cubecl_nif"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 rustler = "0.37"
 half = "2"
 bytemuck = "1"
+
+# NOTE: CubeCL GPU integration is prepared but commented out until the crate
+# is published with the needed features. Uncomment when ready:
+# cubecl = { version = "0.1", features = ["wgpu"], optional = true }
+
+[features]
+default = []
+# gpu = ["cubecl"]

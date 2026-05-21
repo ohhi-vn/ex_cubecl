@@ -1,5 +1,14 @@
 use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
 
+pub mod ffi;
+
+// NOTE: CubeCL GPU integration placeholder.
+// When the cubecl crate is available, uncomment the feature flag in Cargo.toml
+// and add cubecl::wgpu::WgpuRuntime backend support here.
+// For now, all operations run on CPU with optimized integer-aware paths.
+
+// ── DType ─────────────────────────────────────────────────────
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DType {
     F32,
@@ -34,21 +43,28 @@ impl DType {
     }
 }
 
-#[derive(Debug)]
+// ── BufResource ──────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
 pub struct BufResource {
     pub data: Vec<u8>,
     pub shape: Vec<usize>,
     pub dtype: DType,
 }
+
 impl BufResource {
     pub fn num_elements(&self) -> usize {
         self.shape.iter().product()
     }
 }
 
+// ── Atoms ────────────────────────────────────────────────────
+
 mod atoms {
     rustler::atoms! { ok, error }
 }
+
+// ── Helpers ──────────────────────────────────────────────────
 
 fn decode_dtype(s: &str) -> NifResult<DType> {
     DType::from_str(s.trim())
@@ -92,10 +108,7 @@ fn from_f64(vals: Vec<f64>, dtype: DType) -> Vec<u8> {
             let v: Vec<f32> = vals.iter().map(|x| *x as f32).collect();
             bytemuck::cast_slice(&v).to_vec()
         }
-        DType::F64 => {
-            let v: Vec<f64> = vals;
-            bytemuck::cast_slice(&v).to_vec()
-        }
+        DType::F64 => bytemuck::cast_slice(&vals).to_vec(),
         DType::S32 => {
             let v: Vec<i32> = vals.iter().map(|x| *x as i32).collect();
             bytemuck::cast_slice(&v).to_vec()
@@ -112,9 +125,97 @@ fn from_f64(vals: Vec<f64>, dtype: DType) -> Vec<u8> {
     }
 }
 
-fn unary_op(data: &[u8], dtype: DType, op: impl Fn(f64) -> f64) -> Vec<u8> {
-    let v = to_f64(data, dtype);
-    from_f64(v.iter().map(|x| op(*x)).collect(), dtype)
+// Integer-aware binary ops (no f64 roundtrip for integer types)
+fn binary_op_int(
+    data_a: &[u8],
+    dtype_a: DType,
+    data_b: &[u8],
+    dtype_b: DType,
+    op_i64: impl Fn(i64, i64) -> i64,
+    op_f64: impl Fn(f64, f64) -> f64,
+) -> Vec<u8> {
+    match (dtype_a, dtype_b) {
+        (DType::S32, DType::S32) => {
+            let va: &[i32] = bytemuck::cast_slice(data_a);
+            let vb: &[i32] = bytemuck::cast_slice(data_b);
+            let v: Vec<i32> = va
+                .iter()
+                .zip(vb.iter())
+                .map(|(a, b)| op_i64(*a as i64, *b as i64) as i32)
+                .collect();
+            bytemuck::cast_slice(&v).to_vec()
+        }
+        (DType::S64, DType::S64) => {
+            let va: &[i64] = bytemuck::cast_slice(data_a);
+            let vb: &[i64] = bytemuck::cast_slice(data_b);
+            let v: Vec<i64> = va
+                .iter()
+                .zip(vb.iter())
+                .map(|(a, b)| op_i64(*a, *b))
+                .collect();
+            bytemuck::cast_slice(&v).to_vec()
+        }
+        (DType::U32, DType::U32) => {
+            let va: &[u32] = bytemuck::cast_slice(data_a);
+            let vb: &[u32] = bytemuck::cast_slice(data_b);
+            let v: Vec<u32> = va
+                .iter()
+                .zip(vb.iter())
+                .map(|(a, b)| op_i64(*a as i64, *b as i64) as u32)
+                .collect();
+            bytemuck::cast_slice(&v).to_vec()
+        }
+        (DType::U8, DType::U8) => data_a
+            .iter()
+            .zip(data_b.iter())
+            .map(|(a, b)| op_i64(*a as i64, *b as i64) as u8)
+            .collect(),
+        _ => {
+            let va = to_f64(data_a, dtype_a);
+            let vb = to_f64(data_b, dtype_b);
+            from_f64(
+                va.iter()
+                    .zip(vb.iter())
+                    .map(|(a, b)| op_f64(*a, *b))
+                    .collect(),
+                dtype_a,
+            )
+        }
+    }
+}
+
+fn unary_op_int(
+    data: &[u8],
+    dtype: DType,
+    op_i64: impl Fn(i64) -> i64,
+    op_f64: impl Fn(f64) -> f64,
+) -> Vec<u8> {
+    match dtype {
+        DType::S32 => {
+            let va: &[i32] = bytemuck::cast_slice(data);
+            let v: Vec<i32> = va.iter().map(|a| op_i64(*a as i64) as i32).collect();
+            bytemuck::cast_slice(&v).to_vec()
+        }
+        DType::S64 => {
+            let va: &[i64] = bytemuck::cast_slice(data);
+            let v: Vec<i64> = va.iter().map(|a| op_i64(*a)).collect();
+            bytemuck::cast_slice(&v).to_vec()
+        }
+        DType::U32 => {
+            let va: &[u32] = bytemuck::cast_slice(data);
+            let v: Vec<u32> = va.iter().map(|a| op_i64(*a as i64) as u32).collect();
+            bytemuck::cast_slice(&v).to_vec()
+        }
+        DType::U8 => data.iter().map(|a| op_i64(*a as i64) as u8).collect(),
+        _ => {
+            let v = to_f64(data, dtype);
+            from_f64(v.iter().map(|x| op_f64(*x)).collect(), dtype)
+        }
+    }
+}
+
+fn unary_op(data: &[u8], dtype: DType, op: impl Fn(f64) -> f64 + Copy) -> Vec<u8> {
+    unary_op_int(data, dtype, |x| op(x as f64) as i64, op)
 }
 
 fn binary_op(
@@ -122,13 +223,15 @@ fn binary_op(
     dtype_a: DType,
     data_b: &[u8],
     dtype_b: DType,
-    op: impl Fn(f64, f64) -> f64,
+    op: impl Fn(f64, f64) -> f64 + Copy,
 ) -> Vec<u8> {
-    let va = to_f64(data_a, dtype_a);
-    let vb = to_f64(data_b, dtype_b);
-    from_f64(
-        va.iter().zip(vb.iter()).map(|(a, b)| op(*a, *b)).collect(),
+    binary_op_int(
+        data_a,
         dtype_a,
+        data_b,
+        dtype_b,
+        |a, b| op(a as f64, b as f64) as i64,
+        op,
     )
 }
 
@@ -152,6 +255,8 @@ fn binary_op_bool(
         .collect()
 }
 
+// ── NIF init ─────────────────────────────────────────────────
+
 #[allow(non_local_definitions)]
 fn on_load(env: Env, _info: Term) -> bool {
     let _ = rustler::resource!(BufResource, env);
@@ -160,7 +265,9 @@ fn on_load(env: Env, _info: Term) -> bool {
 
 rustler::init!("Elixir.ExCubecl.NIF", load = on_load);
 
-// === Buffer lifecycle ===
+// ═══════════════════════════════════════════════════════════════
+// Buffer lifecycle
+// ═══════════════════════════════════════════════════════════════
 
 #[rustler::nif(schedule = "DirtyCpu")]
 fn new_tensor<'a>(
@@ -211,7 +318,9 @@ fn tensor_dtype(env: Env, buf: ResourceArc<BufResource>) -> NifResult<Term> {
     Ok((atoms::ok(), buf.dtype as usize).encode(env))
 }
 
-// === Binary ops ===
+// ═══════════════════════════════════════════════════════════════
+// Binary ops
+// ═══════════════════════════════════════════════════════════════
 
 #[rustler::nif(schedule = "DirtyCpu")]
 fn add<'a>(
@@ -395,6 +504,8 @@ fn quotient<'a>(
         .encode(env))
 }
 
+// ── Bitwise ops (integer-efficient) ──────────────────────────
+
 #[rustler::nif(schedule = "DirtyCpu")]
 fn bitwise_and<'a>(
     env: Env<'a>,
@@ -404,9 +515,14 @@ fn bitwise_and<'a>(
     Ok((
         atoms::ok(),
         ResourceArc::new(BufResource {
-            data: binary_op(&a.data, a.dtype, &b.data, b.dtype, |x, y| {
-                (x as i64 & y as i64) as f64
-            }),
+            data: binary_op_int(
+                &a.data,
+                a.dtype,
+                &b.data,
+                b.dtype,
+                |x, y| x & y,
+                |x, y| (x as i64 & y as i64) as f64,
+            ),
             shape: a.shape.clone(),
             dtype: a.dtype,
         }),
@@ -423,9 +539,14 @@ fn bitwise_or<'a>(
     Ok((
         atoms::ok(),
         ResourceArc::new(BufResource {
-            data: binary_op(&a.data, a.dtype, &b.data, b.dtype, |x, y| {
-                (x as i64 | y as i64) as f64
-            }),
+            data: binary_op_int(
+                &a.data,
+                a.dtype,
+                &b.data,
+                b.dtype,
+                |x, y| x | y,
+                |x, y| (x as i64 | y as i64) as f64,
+            ),
             shape: a.shape.clone(),
             dtype: a.dtype,
         }),
@@ -442,9 +563,14 @@ fn bitwise_xor<'a>(
     Ok((
         atoms::ok(),
         ResourceArc::new(BufResource {
-            data: binary_op(&a.data, a.dtype, &b.data, b.dtype, |x, y| {
-                (x as i64 ^ y as i64) as f64
-            }),
+            data: binary_op_int(
+                &a.data,
+                a.dtype,
+                &b.data,
+                b.dtype,
+                |x, y| x ^ y,
+                |x, y| (x as i64 ^ y as i64) as f64,
+            ),
             shape: a.shape.clone(),
             dtype: a.dtype,
         }),
@@ -461,9 +587,14 @@ fn left_shift<'a>(
     Ok((
         atoms::ok(),
         ResourceArc::new(BufResource {
-            data: binary_op(&a.data, a.dtype, &b.data, b.dtype, |x, y| {
-                ((x as i64) << (y as i64)) as f64
-            }),
+            data: binary_op_int(
+                &a.data,
+                a.dtype,
+                &b.data,
+                b.dtype,
+                |x, y| x << y,
+                |x, y| ((x as i64) << (y as i64)) as f64,
+            ),
             shape: a.shape.clone(),
             dtype: a.dtype,
         }),
@@ -480,9 +611,14 @@ fn right_shift<'a>(
     Ok((
         atoms::ok(),
         ResourceArc::new(BufResource {
-            data: binary_op(&a.data, a.dtype, &b.data, b.dtype, |x, y| {
-                ((x as i64) >> (y as i64)) as f64
-            }),
+            data: binary_op_int(
+                &a.data,
+                a.dtype,
+                &b.data,
+                b.dtype,
+                |x, y| x >> y,
+                |x, y| ((x as i64) >> (y as i64)) as f64,
+            ),
             shape: a.shape.clone(),
             dtype: a.dtype,
         }),
@@ -490,7 +626,9 @@ fn right_shift<'a>(
         .encode(env))
 }
 
-// === Comparison ops ===
+// ═══════════════════════════════════════════════════════════════
+// Comparison ops
+// ═══════════════════════════════════════════════════════════════
 
 #[rustler::nif(schedule = "DirtyCpu")]
 fn equal<'a>(
@@ -655,438 +793,53 @@ fn logical_xor<'a>(
         .encode(env))
 }
 
-// === Unary ops ===
+// ═══════════════════════════════════════════════════════════════
+// Unary ops
+// ═══════════════════════════════════════════════════════════════
 
-#[rustler::nif(schedule = "DirtyCpu")]
-fn negate<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(BufResource {
-            data: unary_op(&a.data, a.dtype, |x| -x),
-            shape: a.shape.clone(),
-            dtype: a.dtype,
-        }),
-    )
-        .encode(env))
+macro_rules! unary_nif {
+    ($name:ident, $op:expr) => {
+        #[rustler::nif(schedule = "DirtyCpu")]
+        fn $name<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
+            Ok((
+                atoms::ok(),
+                ResourceArc::new(BufResource {
+                    data: unary_op(&a.data, a.dtype, $op),
+                    shape: a.shape.clone(),
+                    dtype: a.dtype,
+                }),
+            )
+                .encode(env))
+        }
+    };
 }
 
-#[rustler::nif(schedule = "DirtyCpu")]
-fn abs_tensor<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(BufResource {
-            data: unary_op(&a.data, a.dtype, |x| x.abs()),
-            shape: a.shape.clone(),
-            dtype: a.dtype,
-        }),
-    )
-        .encode(env))
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn exp<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(BufResource {
-            data: unary_op(&a.data, a.dtype, |x| x.exp()),
-            shape: a.shape.clone(),
-            dtype: a.dtype,
-        }),
-    )
-        .encode(env))
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn log<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(BufResource {
-            data: unary_op(
-                &a.data,
-                a.dtype,
-                |x| if x > 0.0 { x.ln() } else { f64::NAN },
-            ),
-            shape: a.shape.clone(),
-            dtype: a.dtype,
-        }),
-    )
-        .encode(env))
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn sqrt<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(BufResource {
-            data: unary_op(&a.data, a.dtype, |x| x.sqrt()),
-            shape: a.shape.clone(),
-            dtype: a.dtype,
-        }),
-    )
-        .encode(env))
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn sin<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(BufResource {
-            data: unary_op(&a.data, a.dtype, |x| x.sin()),
-            shape: a.shape.clone(),
-            dtype: a.dtype,
-        }),
-    )
-        .encode(env))
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn cos<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(BufResource {
-            data: unary_op(&a.data, a.dtype, |x| x.cos()),
-            shape: a.shape.clone(),
-            dtype: a.dtype,
-        }),
-    )
-        .encode(env))
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn tan<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(BufResource {
-            data: unary_op(&a.data, a.dtype, |x| x.tan()),
-            shape: a.shape.clone(),
-            dtype: a.dtype,
-        }),
-    )
-        .encode(env))
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn sigmoid<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(BufResource {
-            data: unary_op(&a.data, a.dtype, |x| 1.0 / (1.0 + (-x).exp())),
-            shape: a.shape.clone(),
-            dtype: a.dtype,
-        }),
-    )
-        .encode(env))
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn relu<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(BufResource {
-            data: unary_op(&a.data, a.dtype, |x| if x > 0.0 { x } else { 0.0 }),
-            shape: a.shape.clone(),
-            dtype: a.dtype,
-        }),
-    )
-        .encode(env))
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn expm1<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(BufResource {
-            data: unary_op(&a.data, a.dtype, |x| x.exp_m1()),
-            shape: a.shape.clone(),
-            dtype: a.dtype,
-        }),
-    )
-        .encode(env))
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn log1p<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(BufResource {
-            data: unary_op(&a.data, a.dtype, |x| (1.0 + x).ln()),
-            shape: a.shape.clone(),
-            dtype: a.dtype,
-        }),
-    )
-        .encode(env))
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn cosh<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(BufResource {
-            data: unary_op(&a.data, a.dtype, |x| x.cosh()),
-            shape: a.shape.clone(),
-            dtype: a.dtype,
-        }),
-    )
-        .encode(env))
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn sinh<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(BufResource {
-            data: unary_op(&a.data, a.dtype, |x| x.sinh()),
-            shape: a.shape.clone(),
-            dtype: a.dtype,
-        }),
-    )
-        .encode(env))
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn tanh<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(BufResource {
-            data: unary_op(&a.data, a.dtype, |x| x.tanh()),
-            shape: a.shape.clone(),
-            dtype: a.dtype,
-        }),
-    )
-        .encode(env))
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn acos<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(BufResource {
-            data: unary_op(&a.data, a.dtype, |x| x.acos()),
-            shape: a.shape.clone(),
-            dtype: a.dtype,
-        }),
-    )
-        .encode(env))
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn asin<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(BufResource {
-            data: unary_op(&a.data, a.dtype, |x| x.asin()),
-            shape: a.shape.clone(),
-            dtype: a.dtype,
-        }),
-    )
-        .encode(env))
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn atan<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(BufResource {
-            data: unary_op(&a.data, a.dtype, |x| x.atan()),
-            shape: a.shape.clone(),
-            dtype: a.dtype,
-        }),
-    )
-        .encode(env))
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn acosh<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(BufResource {
-            data: unary_op(&a.data, a.dtype, |x| x.acosh()),
-            shape: a.shape.clone(),
-            dtype: a.dtype,
-        }),
-    )
-        .encode(env))
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn asinh<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(BufResource {
-            data: unary_op(&a.data, a.dtype, |x| x.asinh()),
-            shape: a.shape.clone(),
-            dtype: a.dtype,
-        }),
-    )
-        .encode(env))
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn atanh<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(BufResource {
-            data: unary_op(&a.data, a.dtype, |x| x.atanh()),
-            shape: a.shape.clone(),
-            dtype: a.dtype,
-        }),
-    )
-        .encode(env))
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn rsqrt<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(BufResource {
-            data: unary_op(&a.data, a.dtype, |x| 1.0 / x.sqrt()),
-            shape: a.shape.clone(),
-            dtype: a.dtype,
-        }),
-    )
-        .encode(env))
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn cbrt<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(BufResource {
-            data: unary_op(&a.data, a.dtype, |x| x.cbrt()),
-            shape: a.shape.clone(),
-            dtype: a.dtype,
-        }),
-    )
-        .encode(env))
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn erf<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(BufResource {
-            data: unary_op(&a.data, a.dtype, |x| {
-                let s = if x < 0.0 { -1.0 } else { 1.0 };
-                let ax = x.abs();
-                let t = 1.0 / (1.0 + 0.3275911 * ax);
-                let p = 1.061405429 * t - 1.453152027;
-                let p = p * t + 1.421413741;
-                let p = p * t - 0.284496736;
-                let p = p * t + 0.254829592;
-                s * (1.0 - p * t * (-ax * ax).exp())
-            }),
-            shape: a.shape.clone(),
-            dtype: a.dtype,
-        }),
-    )
-        .encode(env))
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn erfc<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(BufResource {
-            data: unary_op(&a.data, a.dtype, |x| {
-                let s = if x < 0.0 { -1.0 } else { 1.0 };
-                let ax = x.abs();
-                let t = 1.0 / (1.0 + 0.3275911 * ax);
-                let p = 1.061405429 * t - 1.453152027;
-                let p = p * t + 1.421413741;
-                let p = p * t - 0.284496736;
-                let p = p * t + 0.254829592;
-                1.0 - s * (1.0 - p * t * (-ax * ax).exp())
-            }),
-            shape: a.shape.clone(),
-            dtype: a.dtype,
-        }),
-    )
-        .encode(env))
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn erf_inv<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(BufResource {
-            data: unary_op(&a.data, a.dtype, |x| {
-                let mut y = 0.0f64;
-                for _ in 0..50 {
-                    let ax = y.abs();
-                    let t = 1.0 / (1.0 + 0.3275911 * ax);
-                    let p = 1.061405429 * t - 1.453152027;
-                    let p = p * t + 1.421413741;
-                    let p = p * t - 0.284496736;
-                    let p = p * t + 0.254829592;
-                    let erf_y =
-                        (if y < 0.0 { -1.0 } else { 1.0 }) * (1.0 - p * t * (-ax * ax).exp());
-                    let e = erf_y - x;
-                    let d = 2.0 / std::f64::consts::PI.sqrt() * (-y * y).exp();
-                    if d.abs() < 1e-15 {
-                        break;
-                    }
-                    y -= e / d;
-                }
-                y
-            }),
-            shape: a.shape.clone(),
-            dtype: a.dtype,
-        }),
-    )
-        .encode(env))
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn bitwise_not<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(BufResource {
-            data: unary_op(&a.data, a.dtype, |x| (!(x as i64)) as f64),
-            shape: a.shape.clone(),
-            dtype: a.dtype,
-        }),
-    )
-        .encode(env))
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn ceil_tensor<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(BufResource {
-            data: unary_op(&a.data, a.dtype, |x| x.ceil()),
-            shape: a.shape.clone(),
-            dtype: a.dtype,
-        }),
-    )
-        .encode(env))
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn floor_tensor<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(BufResource {
-            data: unary_op(&a.data, a.dtype, |x| x.floor()),
-            shape: a.shape.clone(),
-            dtype: a.dtype,
-        }),
-    )
-        .encode(env))
-}
-
-#[rustler::nif(schedule = "DirtyCpu")]
-fn round_tensor<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(BufResource {
-            data: unary_op(&a.data, a.dtype, |x| x.round()),
-            shape: a.shape.clone(),
-            dtype: a.dtype,
-        }),
-    )
-        .encode(env))
-}
+unary_nif!(negate, |x| -x);
+unary_nif!(abs_tensor, |x| x.abs());
+unary_nif!(exp, |x| x.exp());
+unary_nif!(log, |x| if x > 0.0 { x.ln() } else { f64::NAN });
+unary_nif!(sqrt, |x| x.sqrt());
+unary_nif!(sin, |x| x.sin());
+unary_nif!(cos, |x| x.cos());
+unary_nif!(tan, |x| x.tan());
+unary_nif!(sigmoid, |x| 1.0 / (1.0 + (-x).exp()));
+unary_nif!(relu, |x| if x > 0.0 { x } else { 0.0 });
+unary_nif!(expm1, |x| x.exp_m1());
+unary_nif!(log1p, |x| (1.0 + x).ln());
+unary_nif!(cosh, |x| x.cosh());
+unary_nif!(sinh, |x| x.sinh());
+unary_nif!(tanh, |x| x.tanh());
+unary_nif!(acos, |x| x.acos());
+unary_nif!(asin, |x| x.asin());
+unary_nif!(atan, |x| x.atan());
+unary_nif!(acosh, |x| x.acosh());
+unary_nif!(asinh, |x| x.asinh());
+unary_nif!(atanh, |x| x.atanh());
+unary_nif!(rsqrt, |x| 1.0 / x.sqrt());
+unary_nif!(cbrt, |x| x.cbrt());
+unary_nif!(ceil_tensor, |x| x.ceil());
+unary_nif!(floor_tensor, |x| x.floor());
+unary_nif!(round_tensor, |x| x.round());
 
 #[rustler::nif(schedule = "DirtyCpu")]
 fn sign_tensor<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
@@ -1109,6 +862,80 @@ fn sign_tensor<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<
         .encode(env))
 }
 
+fn erf_approx(x: f64) -> f64 {
+    let s = if x < 0.0 { -1.0 } else { 1.0 };
+    let ax = x.abs();
+    let t = 1.0 / (1.0 + 0.3275911 * ax);
+    let p = 1.061405429 * t - 1.453152027;
+    let p = p * t + 1.421413741;
+    let p = p * t - 0.284496736;
+    let p = p * t + 0.254829592;
+    s * (1.0 - p * t * (-ax * ax).exp())
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn erf<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
+    Ok((
+        atoms::ok(),
+        ResourceArc::new(BufResource {
+            data: unary_op(&a.data, a.dtype, erf_approx),
+            shape: a.shape.clone(),
+            dtype: a.dtype,
+        }),
+    )
+        .encode(env))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn erfc<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
+    Ok((
+        atoms::ok(),
+        ResourceArc::new(BufResource {
+            data: unary_op(&a.data, a.dtype, |x| 1.0 - erf_approx(x)),
+            shape: a.shape.clone(),
+            dtype: a.dtype,
+        }),
+    )
+        .encode(env))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn erf_inv<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
+    Ok((
+        atoms::ok(),
+        ResourceArc::new(BufResource {
+            data: unary_op(&a.data, a.dtype, |x| {
+                let mut y = 0.0f64;
+                for _ in 0..50 {
+                    let e = erf_approx(y) - x;
+                    let d = 2.0 / std::f64::consts::PI.sqrt() * (-y * y).exp();
+                    if d.abs() < 1e-15 {
+                        break;
+                    }
+                    y -= e / d;
+                }
+                y
+            }),
+            shape: a.shape.clone(),
+            dtype: a.dtype,
+        }),
+    )
+        .encode(env))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn bitwise_not<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
+    Ok((
+        atoms::ok(),
+        ResourceArc::new(BufResource {
+            data: unary_op_int(&a.data, a.dtype, |x| !x, |x| (!(x as i64)) as f64),
+            shape: a.shape.clone(),
+            dtype: a.dtype,
+        }),
+    )
+        .encode(env))
+}
+
 #[rustler::nif(schedule = "DirtyCpu")]
 fn conjugate<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
     Ok((
@@ -1124,10 +951,40 @@ fn conjugate<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a
 
 #[rustler::nif(schedule = "DirtyCpu")]
 fn count_leading_zeros<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
+    let data = match a.dtype {
+        DType::S32 => {
+            let va: &[i32] = bytemuck::cast_slice(&a.data);
+            let v: Vec<i32> = va.iter().map(|x| x.leading_zeros() as i32).collect();
+            bytemuck::cast_slice(&v).to_vec()
+        }
+        DType::S64 => {
+            let va: &[i64] = bytemuck::cast_slice(&a.data);
+            let v: Vec<i64> = va.iter().map(|x| x.leading_zeros() as i64).collect();
+            bytemuck::cast_slice(&v).to_vec()
+        }
+        DType::U32 => {
+            let va: &[u32] = bytemuck::cast_slice(&a.data);
+            let v: Vec<u32> = va.iter().map(|x| x.leading_zeros() as u32).collect();
+            bytemuck::cast_slice(&v).to_vec()
+        }
+        DType::U8 => {
+            let v: Vec<u8> = a.data.iter().map(|x| x.leading_zeros() as u8).collect();
+            v
+        }
+        _ => {
+            let v = to_f64(&a.data, a.dtype);
+            from_f64(
+                v.iter()
+                    .map(|x| (*x as u64).leading_zeros() as f64)
+                    .collect(),
+                a.dtype,
+            )
+        }
+    };
     Ok((
         atoms::ok(),
         ResourceArc::new(BufResource {
-            data: unary_op(&a.data, a.dtype, |x| (x as u64).leading_zeros() as f64),
+            data,
             shape: a.shape.clone(),
             dtype: a.dtype,
         }),
@@ -1137,10 +994,38 @@ fn count_leading_zeros<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResu
 
 #[rustler::nif(schedule = "DirtyCpu")]
 fn population_count<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<'a>> {
+    let data = match a.dtype {
+        DType::S32 => {
+            let va: &[i32] = bytemuck::cast_slice(&a.data);
+            let v: Vec<i32> = va.iter().map(|x| x.count_ones() as i32).collect();
+            bytemuck::cast_slice(&v).to_vec()
+        }
+        DType::S64 => {
+            let va: &[i64] = bytemuck::cast_slice(&a.data);
+            let v: Vec<i64> = va.iter().map(|x| x.count_ones() as i64).collect();
+            bytemuck::cast_slice(&v).to_vec()
+        }
+        DType::U32 => {
+            let va: &[u32] = bytemuck::cast_slice(&a.data);
+            let v: Vec<u32> = va.iter().map(|x| x.count_ones() as u32).collect();
+            bytemuck::cast_slice(&v).to_vec()
+        }
+        DType::U8 => {
+            let v: Vec<u8> = a.data.iter().map(|x| x.count_ones() as u8).collect();
+            v
+        }
+        _ => {
+            let v = to_f64(&a.data, a.dtype);
+            from_f64(
+                v.iter().map(|x| (*x as u64).count_ones() as f64).collect(),
+                a.dtype,
+            )
+        }
+    };
     Ok((
         atoms::ok(),
         ResourceArc::new(BufResource {
-            data: unary_op(&a.data, a.dtype, |x| (x as u64).count_ones() as f64),
+            data,
             shape: a.shape.clone(),
             dtype: a.dtype,
         }),
@@ -1201,7 +1086,9 @@ fn is_infinity<'a>(env: Env<'a>, a: ResourceArc<BufResource>) -> NifResult<Term<
         .encode(env))
 }
 
-// === Shape ops ===
+// ═══════════════════════════════════════════════════════════════
+// Shape operations
+// ═══════════════════════════════════════════════════════════════
 
 #[rustler::nif(schedule = "DirtyCpu")]
 fn reshape_tensor<'a>(
@@ -1269,8 +1156,7 @@ fn broadcast_tensor<'a>(
     target_shape: Vec<usize>,
     axes: Vec<usize>,
 ) -> NifResult<Term<'a>> {
-    let in_shape = &buf.shape;
-    let in_rank = in_shape.len();
+    let in_rank = buf.shape.len();
     let out_rank = target_shape.len();
     if axes.len() != in_rank {
         return Err(Error::RaiseTerm(Box::new(
@@ -1279,7 +1165,7 @@ fn broadcast_tensor<'a>(
     }
     let total_out: usize = target_shape.iter().product();
     let out_strides = strides_for(&target_shape);
-    let in_strides = strides_for(in_shape);
+    let in_strides = strides_for(&buf.shape);
     let in_f64 = to_f64(&buf.data, buf.dtype);
     let mut out_vals = vec![0.0f64; total_out];
     for i in 0..total_out {
@@ -1291,8 +1177,7 @@ fn broadcast_tensor<'a>(
         }
         let mut in_coords = vec![0usize; in_rank];
         for (di, &ax) in axes.iter().enumerate() {
-            let ax = ax as usize;
-            in_coords[di] = if ax < out_rank && in_shape[di] == target_shape[ax] {
+            in_coords[di] = if ax < out_rank && buf.shape[di] == target_shape[ax] {
                 coords[ax]
             } else {
                 0
@@ -1451,7 +1336,6 @@ fn reverse_tensor<'a>(
         }
         let mut in_coords = coords.clone();
         for &ax in &axes {
-            let ax = ax as usize;
             if ax < rank {
                 in_coords[ax] = buf.shape[ax] - 1 - coords[ax];
             }
@@ -1501,10 +1385,9 @@ fn slice_tensor<'a>(
             out_coords[d] = rem / out_strides[d];
             rem %= out_strides[d];
         }
-        let mut in_coords = vec![0usize; rank];
-        for d in 0..rank {
-            in_coords[d] = starts[d] + out_coords[d] * strides[d];
-        }
+        let in_coords: Vec<usize> = (0..rank)
+            .map(|d| starts[d] + out_coords[d] * strides[d])
+            .collect();
         let flat_in: usize = in_coords
             .iter()
             .zip(in_strides.iter())
@@ -1641,6 +1524,18 @@ fn stack_tensors<'a>(
         .encode(env))
 }
 
+fn broadcast_shape_simple(a: &[usize], b: &[usize], c: &[usize]) -> Vec<usize> {
+    let max_len = a.len().max(b.len()).max(c.len());
+    let mut result = vec![0usize; max_len];
+    for i in 0..max_len {
+        let da = if i < a.len() { a[a.len() - 1 - i] } else { 1 };
+        let db = if i < b.len() { b[b.len() - 1 - i] } else { 1 };
+        let dc = if i < c.len() { c[c.len() - 1 - i] } else { 1 };
+        result[max_len - 1 - i] = da.max(db).max(dc);
+    }
+    result
+}
+
 #[rustler::nif(schedule = "DirtyCpu")]
 fn select_tensor<'a>(
     env: Env<'a>,
@@ -1732,19 +1627,9 @@ fn select_tensor<'a>(
         .encode(env))
 }
 
-fn broadcast_shape_simple(a: &[usize], b: &[usize], c: &[usize]) -> Vec<usize> {
-    let max_len = a.len().max(b.len()).max(c.len());
-    let mut result = vec![0usize; max_len];
-    for i in 0..max_len {
-        let da = if i < a.len() { a[a.len() - 1 - i] } else { 1 };
-        let db = if i < b.len() { b[b.len() - 1 - i] } else { 1 };
-        let dc = if i < c.len() { c[c.len() - 1 - i] } else { 1 };
-        result[max_len - 1 - i] = da.max(db).max(dc);
-    }
-    result
-}
-
-// === Reductions ===
+// ═══════════════════════════════════════════════════════════════
+// Reductions
+// ═══════════════════════════════════════════════════════════════
 
 fn reduce_along_axes(
     data: &[u8],
@@ -1821,17 +1706,6 @@ fn decode_reduction_opts(opts: Term) -> NifResult<(Vec<usize>, bool)> {
                     }
                     _ => {}
                 }
-            } else if let Ok((key, val)) = item.decode::<(rustler::Atom, Term)>() {
-                let ks: String = key.decode().unwrap_or_default();
-                match ks.as_str() {
-                    "axes" => {
-                        axes = val.decode::<Vec<usize>>().unwrap_or_default();
-                    }
-                    "keep_axes" | "keep_dims" => {
-                        keep_dims = val.decode::<bool>().unwrap_or(false);
-                    }
-                    _ => {}
-                }
             }
         }
     }
@@ -1845,17 +1719,6 @@ fn decode_axis_opts(opts: Term) -> NifResult<(usize, bool)> {
         for item in list {
             if let Ok((ref key, val)) = item.decode::<(String, Term)>() {
                 match key.as_str() {
-                    "axis" => {
-                        axis = val.decode::<usize>().unwrap_or(0);
-                    }
-                    "keep_axes" | "keep_dims" => {
-                        keep_dims = val.decode::<bool>().unwrap_or(false);
-                    }
-                    _ => {}
-                }
-            } else if let Ok((key, val)) = item.decode::<(rustler::Atom, Term)>() {
-                let ks: String = key.decode().unwrap_or_default();
-                match ks.as_str() {
                     "axis" => {
                         axis = val.decode::<usize>().unwrap_or(0);
                     }
@@ -1878,20 +1741,6 @@ fn decode_window_opts(opts: Term) -> NifResult<(Vec<usize>, Vec<usize>, bool)> {
         for item in list {
             if let Ok((ref key, val)) = item.decode::<(String, Term)>() {
                 match key.as_str() {
-                    "shape" => {
-                        shape = val.decode::<Vec<usize>>().unwrap_or_default();
-                    }
-                    "axes" => {
-                        axes = val.decode::<Vec<usize>>().unwrap_or_default();
-                    }
-                    "keep_axes" | "keep_dims" => {
-                        keep_dims = val.decode::<bool>().unwrap_or(false);
-                    }
-                    _ => {}
-                }
-            } else if let Ok((key, val)) = item.decode::<(rustler::Atom, Term)>() {
-                let ks: String = key.decode().unwrap_or_default();
-                match ks.as_str() {
                     "shape" => {
                         shape = val.decode::<Vec<usize>>().unwrap_or_default();
                     }
@@ -2067,8 +1916,8 @@ fn argmax_tensor<'a>(
     let out_strides = strides_for(&out_shape);
     let in_strides = strides_for(shape);
     let in_f64 = to_f64(&buf.data, buf.dtype);
-    let mut out_data = vec![0u8; total_out * 8];
-    let out_i64: &mut [i64] = bytemuck::cast_slice_mut(&mut out_data);
+    let mut out_data = vec![0u8; total_out * 4];
+    let out_i32: &mut [i32] = bytemuck::cast_slice_mut(&mut out_data);
     for i in 0..total_out {
         let mut out_coords = vec![0usize; out_shape.len()];
         let mut rem = i;
@@ -2089,7 +1938,7 @@ fn argmax_tensor<'a>(
             }
         }
         let mut best_val = f64::MIN;
-        let mut best_idx: i64 = 0;
+        let mut best_idx: i32 = 0;
         for j in 0..axis_size {
             in_coords[axis] = j;
             let flat_in: usize = in_coords
@@ -2100,17 +1949,17 @@ fn argmax_tensor<'a>(
             let val = in_f64[flat_in];
             if val > best_val {
                 best_val = val;
-                best_idx = j as i64;
+                best_idx = j as i32;
             }
         }
-        out_i64[i] = best_idx;
+        out_i32[i] = best_idx;
     }
     Ok((
         atoms::ok(),
         ResourceArc::new(BufResource {
             data: out_data,
             shape: out_shape,
-            dtype: DType::S64,
+            dtype: DType::S32,
         }),
     )
         .encode(env))
@@ -2144,8 +1993,8 @@ fn argmin_tensor<'a>(
     let out_strides = strides_for(&out_shape);
     let in_strides = strides_for(shape);
     let in_f64 = to_f64(&buf.data, buf.dtype);
-    let mut out_data = vec![0u8; total_out * 8];
-    let out_i64: &mut [i64] = bytemuck::cast_slice_mut(&mut out_data);
+    let mut out_data = vec![0u8; total_out * 4];
+    let out_i32: &mut [i32] = bytemuck::cast_slice_mut(&mut out_data);
     for i in 0..total_out {
         let mut out_coords = vec![0usize; out_shape.len()];
         let mut rem = i;
@@ -2166,7 +2015,7 @@ fn argmin_tensor<'a>(
             }
         }
         let mut best_val = f64::MAX;
-        let mut best_idx: i64 = 0;
+        let mut best_idx: i32 = 0;
         for j in 0..axis_size {
             in_coords[axis] = j;
             let flat_in: usize = in_coords
@@ -2177,23 +2026,25 @@ fn argmin_tensor<'a>(
             let val = in_f64[flat_in];
             if val < best_val {
                 best_val = val;
-                best_idx = j as i64;
+                best_idx = j as i32;
             }
         }
-        out_i64[i] = best_idx;
+        out_i32[i] = best_idx;
     }
     Ok((
         atoms::ok(),
         ResourceArc::new(BufResource {
             data: out_data,
             shape: out_shape,
-            dtype: DType::S64,
+            dtype: DType::S32,
         }),
     )
         .encode(env))
 }
 
-// === Window ops ===
+// ═══════════════════════════════════════════════════════════════
+// Window operations
+// ═══════════════════════════════════════════════════════════════
 
 fn window_reduce(
     data: &[u8],
@@ -2240,16 +2091,12 @@ fn window_reduce(
         let mut in_coords = vec![0usize; rank];
         let mut oi = 0;
         for d in 0..rank {
-            if axes.contains(&d) {
-                in_coords[d] = out_coords[oi];
-                oi += 1;
-            } else {
-                in_coords[d] = out_coords[oi];
-                oi += 1;
-            }
+            in_coords[d] = out_coords[oi];
+            oi += 1;
         }
         let mut acc = init;
-        for w_idx in 0..axes.iter().map(|&a| ws[a]).product::<usize>() {
+        let n_window: usize = axes.iter().map(|&a| ws[a]).product();
+        for w_idx in 0..n_window {
             let mut wc = vec![0usize; axes.len()];
             let mut r = w_idx;
             for k in (0..axes.len()).rev() {
@@ -2359,17 +2206,19 @@ fn window_min<'a>(
         .encode(env))
 }
 
-// === LinAlg / Type ===
+// ═══════════════════════════════════════════════════════════════
+// LinAlg / Type conversion / Creation
+// ═══════════════════════════════════════════════════════════════
 
 #[rustler::nif(schedule = "DirtyCpu")]
 fn dot_tensor<'a>(
     env: Env<'a>,
     a: ResourceArc<BufResource>,
-    _c1: usize,
-    _b1: usize,
+    _c1: Vec<usize>,
+    _b1: Vec<usize>,
     b: ResourceArc<BufResource>,
-    _c2: usize,
-    _b2: usize,
+    _c2: Vec<usize>,
+    _b2: Vec<usize>,
 ) -> NifResult<Term<'a>> {
     let a_s = &a.shape;
     let b_s = &b.shape;
@@ -2544,7 +2393,480 @@ fn iota_tensor<'a>(
         .encode(env))
 }
 
-// === Stubs ===
+// ═══════════════════════════════════════════════════════════════
+// Sorting
+// ═══════════════════════════════════════════════════════════════
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn sort_tensor<'a>(env: Env<'a>, buf: ResourceArc<BufResource>, opts: Term) -> NifResult<Term<'a>> {
+    let (axis, _) = decode_axis_opts(opts).map(|(a, _kd)| (a, false))?;
+    let shape = &buf.shape;
+    let rank = shape.len();
+    if rank == 0 {
+        return Ok((
+            atoms::ok(),
+            ResourceArc::new(BufResource {
+                data: buf.data.clone(),
+                shape: buf.shape.clone(),
+                dtype: buf.dtype,
+            }),
+        )
+            .encode(env));
+    }
+    let axis = if axis >= rank { 0 } else { axis };
+    let axis_size = shape[axis];
+    if axis_size <= 1 {
+        return Ok((
+            atoms::ok(),
+            ResourceArc::new(BufResource {
+                data: buf.data.clone(),
+                shape: buf.shape.clone(),
+                dtype: buf.dtype,
+            }),
+        )
+            .encode(env));
+    }
+    let in_strides = strides_for(shape);
+    let in_f64 = to_f64(&buf.data, buf.dtype);
+    let total: usize = shape.iter().product();
+    let mut out_vals = vec![0.0f64; total];
+    let n_slices = total / axis_size;
+    for s in 0..n_slices {
+        let mut rem = s;
+        let mut base_idx = 0usize;
+        for d in 0..rank {
+            let coord = rem / in_strides[d];
+            rem %= in_strides[d];
+            if d != axis {
+                base_idx += coord * in_strides[d];
+            }
+        }
+        let mut slice_vals: Vec<f64> = (0..axis_size)
+            .map(|j| in_f64[base_idx + j * in_strides[axis]])
+            .collect();
+        slice_vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        for (j, &val) in slice_vals.iter().enumerate() {
+            out_vals[base_idx + j * in_strides[axis]] = val;
+        }
+    }
+    Ok((
+        atoms::ok(),
+        ResourceArc::new(BufResource {
+            data: from_f64(out_vals, buf.dtype),
+            shape: buf.shape.clone(),
+            dtype: buf.dtype,
+        }),
+    )
+        .encode(env))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn argsort_tensor<'a>(
+    env: Env<'a>,
+    buf: ResourceArc<BufResource>,
+    opts: Term,
+) -> NifResult<Term<'a>> {
+    let (axis, _) = decode_axis_opts(opts).map(|(a, _kd)| (a, false))?;
+    let shape = &buf.shape;
+    let rank = shape.len();
+    if rank == 0 {
+        return Ok((
+            atoms::ok(),
+            ResourceArc::new(BufResource {
+                data: vec![0u8; 8],
+                shape: buf.shape.clone(),
+                dtype: DType::S64,
+            }),
+        )
+            .encode(env));
+    }
+    let axis = if axis >= rank { 0 } else { axis };
+    let axis_size = shape[axis];
+    let in_strides = strides_for(shape);
+    let in_f64 = to_f64(&buf.data, buf.dtype);
+    let total: usize = shape.iter().product();
+    let n_slices = total / axis_size;
+    let mut out_vals = vec![0i64; total];
+    for s in 0..n_slices {
+        let mut rem = s;
+        let mut base_idx = 0usize;
+        for d in 0..rank {
+            let coord = rem / in_strides[d];
+            rem %= in_strides[d];
+            if d != axis {
+                base_idx += coord * in_strides[d];
+            }
+        }
+        let mut indexed: Vec<(f64, usize)> = (0..axis_size)
+            .map(|j| (in_f64[base_idx + j * in_strides[axis]], j))
+            .collect();
+        indexed.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        for (j, &(_, orig_idx)) in indexed.iter().enumerate() {
+            out_vals[base_idx + j * in_strides[axis]] = orig_idx as i64;
+        }
+    }
+    let out_data = bytemuck::cast_slice(&out_vals).to_vec();
+    Ok((
+        atoms::ok(),
+        ResourceArc::new(BufResource {
+            data: out_data,
+            shape: buf.shape.clone(),
+            dtype: DType::S64,
+        }),
+    )
+        .encode(env))
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Additional operations (gather, put_slice, bitcast, conv, indexed)
+// ═══════════════════════════════════════════════════════════════
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn gather<'a>(
+    env: Env<'a>,
+    input: ResourceArc<BufResource>,
+    indices: ResourceArc<BufResource>,
+    opts: Term,
+) -> NifResult<Term<'a>> {
+    let mut axis = 0usize;
+    if let Ok(list) = opts.decode::<Vec<Term>>() {
+        for item in list {
+            if let Ok((ref key, val)) = item.decode::<(String, Term)>() {
+                match key.as_str() {
+                    "axes" => {
+                        if let Ok(axes) = val.decode::<Vec<usize>>() {
+                            axis = axes.first().copied().unwrap_or(0);
+                        }
+                    }
+                    "axis" => {
+                        axis = val.decode::<usize>().unwrap_or(0);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    let in_shape = &input.shape;
+    let idx_shape = &indices.shape;
+    let rank = in_shape.len();
+    if axis >= rank {
+        return Err(Error::RaiseTerm(Box::new("gather: axis out of range")));
+    }
+    let axis_size = in_shape[axis];
+    let in_strides = strides_for(in_shape);
+    let idx_data = to_f64(&indices.data, indices.dtype);
+    let in_f64 = to_f64(&input.data, input.dtype);
+    let idx_strides = strides_for(idx_shape);
+    let num_indices: usize = idx_shape.iter().product();
+    // Output shape: indices shape without the last dimension (which corresponds to axes)
+    // For simple 1D indices, output shape = indices shape
+    // For multi-dimensional indices with last dim = num_axes, output shape = indices shape without last dim
+    let num_axes = 1; // We only support single axis for now
+    let out_shape: Vec<usize> = if idx_shape.len() > num_axes {
+        idx_shape[..idx_shape.len() - num_axes].to_vec()
+    } else {
+        vec![1]
+    };
+    let total_out: usize = out_shape.iter().product();
+    let out_strides = strides_for(&out_shape);
+    let mut out_vals = vec![0.0f64; total_out];
+    for i in 0..total_out {
+        // Compute output coordinates
+        let mut out_coords = vec![0usize; out_shape.len()];
+        let mut rem = i;
+        for d in 0..out_shape.len() {
+            out_coords[d] = rem / out_strides[d];
+            rem %= out_strides[d];
+        }
+        // Compute the flat index into the indices tensor
+        let idx_flat = if out_shape.len() == 1 && out_shape[0] == num_indices {
+            i
+        } else {
+            let mut idx_coords = out_coords.clone();
+            for _ in 0..num_axes {
+                idx_coords.push(0);
+            }
+            idx_coords
+                .iter()
+                .zip(idx_strides.iter())
+                .map(|(c, s)| c * s)
+                .sum()
+        };
+        let idx_val = if idx_flat < num_indices {
+            idx_data[idx_flat] as usize
+        } else {
+            0
+        };
+        let idx_val = idx_val.min(axis_size - 1);
+        // Compute the flat index into the input tensor
+        let flat_in = if rank == 1 {
+            idx_val
+        } else {
+            let mut in_coords = vec![0usize; rank];
+            let mut oi = 0;
+            for d in 0..rank {
+                if d == axis {
+                    in_coords[d] = idx_val;
+                } else {
+                    in_coords[d] = out_coords.get(oi).copied().unwrap_or(0);
+                    oi += 1;
+                }
+            }
+            in_coords
+                .iter()
+                .zip(in_strides.iter())
+                .map(|(c, s)| c * s)
+                .sum()
+        };
+        out_vals[i] = in_f64[flat_in];
+    }
+    Ok((
+        atoms::ok(),
+        ResourceArc::new(BufResource {
+            data: from_f64(out_vals, input.dtype),
+            shape: out_shape,
+            dtype: input.dtype,
+        }),
+    )
+        .encode(env))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn put_slice<'a>(
+    env: Env<'a>,
+    buf: ResourceArc<BufResource>,
+    starts: Vec<usize>,
+    slice: ResourceArc<BufResource>,
+) -> NifResult<Term<'a>> {
+    let rank = buf.shape.len();
+    let in_strides = strides_for(&buf.shape);
+    let slice_strides = strides_for(&slice.shape);
+    let mut out_data = to_f64(&buf.data, buf.dtype);
+    let slice_f64 = to_f64(&slice.data, slice.dtype);
+    let total_slice: usize = slice.shape.iter().product();
+    for i in 0..total_slice {
+        let mut slice_coords = vec![0usize; rank];
+        let mut rem = i;
+        for d in 0..rank {
+            slice_coords[d] = rem / slice_strides[d];
+            rem %= slice_strides[d];
+        }
+        let mut out_idx = 0usize;
+        for d in 0..rank {
+            out_idx += (starts[d] + slice_coords[d]) * in_strides[d];
+        }
+        if out_idx < out_data.len() {
+            out_data[out_idx] = slice_f64[i];
+        }
+    }
+    Ok((
+        atoms::ok(),
+        ResourceArc::new(BufResource {
+            data: from_f64(out_data, buf.dtype),
+            shape: buf.shape.clone(),
+            dtype: buf.dtype,
+        }),
+    )
+        .encode(env))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn bitcast_tensor<'a>(
+    env: Env<'a>,
+    buf: ResourceArc<BufResource>,
+    dtype_str: String,
+) -> NifResult<Term<'a>> {
+    let new_dtype = decode_dtype(&dtype_str)?;
+    let old_size = buf.dtype.size_in_bytes();
+    let new_size = new_dtype.size_in_bytes();
+    if old_size == new_size {
+        return Ok((
+            atoms::ok(),
+            ResourceArc::new(BufResource {
+                data: buf.data.clone(),
+                shape: buf.shape.clone(),
+                dtype: new_dtype,
+            }),
+        )
+            .encode(env));
+    }
+    if old_size > new_size {
+        // Truncate: keep only the bytes that fit
+        let new_n = buf.data.len() / new_size;
+        let mut new_data = vec![0u8; new_n * new_size];
+        for i in 0..new_n {
+            new_data[i * new_size..(i + 1) * new_size]
+                .copy_from_slice(&buf.data[i * old_size..i * old_size + new_size]);
+        }
+        let mut new_shape = buf.shape.clone();
+        let last = new_shape.len() - 1;
+        new_shape[last] = new_shape[last] * old_size / new_size;
+        return Ok((
+            atoms::ok(),
+            ResourceArc::new(BufResource {
+                data: new_data,
+                shape: new_shape,
+                dtype: new_dtype,
+            }),
+        )
+            .encode(env));
+    }
+    // old_size < new_size: expand with zeros
+    let repeat = new_size / old_size;
+    let n = buf.data.len() / old_size;
+    let mut new_data = vec![0u8; n * new_size];
+    for i in 0..n {
+        new_data[i * new_size..i * new_size + old_size]
+            .copy_from_slice(&buf.data[i * old_size..(i + 1) * old_size]);
+    }
+    let mut new_shape = buf.shape.clone();
+    let last = new_shape.len() - 1;
+    new_shape[last] = new_shape[last] / repeat;
+    Ok((
+        atoms::ok(),
+        ResourceArc::new(BufResource {
+            data: new_data,
+            shape: new_shape,
+            dtype: new_dtype,
+        }),
+    )
+        .encode(env))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn conv<'a>(
+    env: Env<'a>,
+    input: ResourceArc<BufResource>,
+    kernel: ResourceArc<BufResource>,
+    _opts: Term,
+) -> NifResult<Term<'a>> {
+    // Simple 2D convolution (no padding, stride=1)
+    let in_shape = &input.shape;
+    let k_shape = &kernel.shape;
+    if in_shape.len() < 2 || k_shape.len() < 2 {
+        return Err(Error::RaiseTerm(Box::new("conv: need >= 2D")));
+    }
+    let in_h = in_shape[in_shape.len() - 2];
+    let in_w = in_shape[in_shape.len() - 1];
+    let k_h = k_shape[k_shape.len() - 2];
+    let k_w = k_shape[k_shape.len() - 1];
+    let out_h = in_h.saturating_sub(k_h - 1);
+    let out_w = in_w.saturating_sub(k_w - 1);
+    if out_h == 0 || out_w == 0 {
+        return Err(Error::RaiseTerm(Box::new("conv: kernel larger than input")));
+    }
+    let batch: usize = in_shape[..in_shape.len() - 2].iter().product();
+    let in_f = to_f64(&input.data, input.dtype);
+    let k_f = to_f64(&kernel.data, kernel.dtype);
+    let mut out_shape = in_shape[..in_shape.len() - 2].to_vec();
+    out_shape.push(out_h);
+    out_shape.push(out_w);
+    let total_out = batch * out_h * out_w;
+    let mut out_vals = vec![0.0f64; total_out];
+    for b in 0..batch {
+        for oh in 0..out_h {
+            for ow in 0..out_w {
+                let mut sum = 0.0;
+                for kh in 0..k_h {
+                    for kw in 0..k_w {
+                        let ih = oh + kh;
+                        let iw = ow + kw;
+                        let in_idx = b * in_h * in_w + ih * in_w + iw;
+                        let k_idx = kh * k_w + kw;
+                        sum += in_f[in_idx] * k_f[k_idx];
+                    }
+                }
+                out_vals[b * out_h * out_w + oh * out_w + ow] = sum;
+            }
+        }
+    }
+    Ok((
+        atoms::ok(),
+        ResourceArc::new(BufResource {
+            data: from_f64(out_vals, input.dtype),
+            shape: out_shape,
+            dtype: input.dtype,
+        }),
+    )
+        .encode(env))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn indexed_add<'a>(
+    env: Env<'a>,
+    t: ResourceArc<BufResource>,
+    indices: ResourceArc<BufResource>,
+    updates: ResourceArc<BufResource>,
+    _opts: Term,
+) -> NifResult<Term<'a>> {
+    let mut out_data = to_f64(&t.data, t.dtype);
+    let idx_f = to_f64(&indices.data, indices.dtype);
+    let upd_f = to_f64(&updates.data, updates.dtype);
+    let n = idx_f.len();
+    let rank = t.shape.len();
+    let in_strides = strides_for(&t.shape);
+    for i in 0..n {
+        let idx = idx_f[i] as usize;
+        if idx < t.shape[0] {
+            let offset = idx * in_strides[0];
+            let upd_offset = i * in_strides[0];
+            for j in 0..in_strides[0] {
+                if offset + j < out_data.len() && upd_offset + j < upd_f.len() {
+                    out_data[offset + j] += upd_f[upd_offset + j];
+                }
+            }
+        }
+    }
+    Ok((
+        atoms::ok(),
+        ResourceArc::new(BufResource {
+            data: from_f64(out_data, t.dtype),
+            shape: t.shape.clone(),
+            dtype: t.dtype,
+        }),
+    )
+        .encode(env))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn indexed_put<'a>(
+    env: Env<'a>,
+    t: ResourceArc<BufResource>,
+    indices: ResourceArc<BufResource>,
+    updates: ResourceArc<BufResource>,
+    _opts: Term,
+) -> NifResult<Term<'a>> {
+    let mut out_data = to_f64(&t.data, t.dtype);
+    let idx_f = to_f64(&indices.data, indices.dtype);
+    let upd_f = to_f64(&updates.data, updates.dtype);
+    let n = idx_f.len();
+    let in_strides = strides_for(&t.shape);
+    for i in 0..n {
+        let idx = idx_f[i] as usize;
+        if idx < t.shape[0] {
+            let offset = idx * in_strides[0];
+            let upd_offset = i * in_strides[0];
+            for j in 0..in_strides[0] {
+                if offset + j < out_data.len() && upd_offset + j < upd_f.len() {
+                    out_data[offset + j] = upd_f[upd_offset + j];
+                }
+            }
+        }
+    }
+    Ok((
+        atoms::ok(),
+        ResourceArc::new(BufResource {
+            data: from_f64(out_data, t.dtype),
+            shape: t.shape.clone(),
+            dtype: t.dtype,
+        }),
+    )
+        .encode(env))
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Stubs for complex ops (fallback to BinaryBackend on Elixir side)
+// ═══════════════════════════════════════════════════════════════
 
 #[rustler::nif(schedule = "DirtyCpu")]
 fn triangular_solve<'a>(
@@ -2553,52 +2875,21 @@ fn triangular_solve<'a>(
     _b: ResourceArc<BufResource>,
     _c: Term,
 ) -> NifResult<Term<'a>> {
-    Err(Error::RaiseTerm(Box::new("not implemented")))
-}
-#[rustler::nif(schedule = "DirtyCpu")]
-fn conv<'a>(
-    env: Env<'a>,
-    _a: ResourceArc<BufResource>,
-    _b: ResourceArc<BufResource>,
-    _c: Term,
-) -> NifResult<Term<'a>> {
-    Err(Error::RaiseTerm(Box::new("not implemented")))
-}
-#[rustler::nif(schedule = "DirtyCpu")]
-fn sort_tensor<'a>(env: Env<'a>, _a: ResourceArc<BufResource>, _b: Term) -> NifResult<Term<'a>> {
-    Err(Error::RaiseTerm(Box::new("not implemented")))
-}
-#[rustler::nif(schedule = "DirtyCpu")]
-fn argsort_tensor<'a>(env: Env<'a>, _a: ResourceArc<BufResource>, _b: Term) -> NifResult<Term<'a>> {
-    Err(Error::RaiseTerm(Box::new("not implemented")))
+    Err(Error::RaiseTerm(Box::new(
+        "triangular_solve: not implemented, use BinaryBackend fallback",
+    )))
 }
 #[rustler::nif(schedule = "DirtyCpu")]
 fn fft_tensor<'a>(env: Env<'a>, _a: ResourceArc<BufResource>, _b: Term) -> NifResult<Term<'a>> {
-    Err(Error::RaiseTerm(Box::new("not implemented")))
+    Err(Error::RaiseTerm(Box::new(
+        "fft: not implemented, use BinaryBackend fallback",
+    )))
 }
 #[rustler::nif(schedule = "DirtyCpu")]
 fn ifft_tensor<'a>(env: Env<'a>, _a: ResourceArc<BufResource>, _b: Term) -> NifResult<Term<'a>> {
-    Err(Error::RaiseTerm(Box::new("not implemented")))
-}
-#[rustler::nif(schedule = "DirtyCpu")]
-fn indexed_add<'a>(
-    env: Env<'a>,
-    _a: ResourceArc<BufResource>,
-    _b: ResourceArc<BufResource>,
-    _c: ResourceArc<BufResource>,
-    _d: Term,
-) -> NifResult<Term<'a>> {
-    Err(Error::RaiseTerm(Box::new("not implemented")))
-}
-#[rustler::nif(schedule = "DirtyCpu")]
-fn indexed_put<'a>(
-    env: Env<'a>,
-    _a: ResourceArc<BufResource>,
-    _b: ResourceArc<BufResource>,
-    _c: ResourceArc<BufResource>,
-    _d: Term,
-) -> NifResult<Term<'a>> {
-    Err(Error::RaiseTerm(Box::new("not implemented")))
+    Err(Error::RaiseTerm(Box::new(
+        "ifft: not implemented, use BinaryBackend fallback",
+    )))
 }
 #[rustler::nif(schedule = "DirtyCpu")]
 fn window_scatter_max<'a>(
@@ -2609,7 +2900,9 @@ fn window_scatter_max<'a>(
     _d: Vec<usize>,
     _e: Term,
 ) -> NifResult<Term<'a>> {
-    Err(Error::RaiseTerm(Box::new("not implemented")))
+    Err(Error::RaiseTerm(Box::new(
+        "window_scatter_max: not implemented",
+    )))
 }
 #[rustler::nif(schedule = "DirtyCpu")]
 fn window_scatter_min<'a>(
@@ -2620,7 +2913,9 @@ fn window_scatter_min<'a>(
     _d: Vec<usize>,
     _e: Term,
 ) -> NifResult<Term<'a>> {
-    Err(Error::RaiseTerm(Box::new("not implemented")))
+    Err(Error::RaiseTerm(Box::new(
+        "window_scatter_min: not implemented",
+    )))
 }
 #[rustler::nif(schedule = "DirtyCpu")]
 fn reduce<'a>(
@@ -2630,7 +2925,9 @@ fn reduce<'a>(
     _c: Term,
     _d: Term,
 ) -> NifResult<Term<'a>> {
-    Err(Error::RaiseTerm(Box::new("not implemented")))
+    Err(Error::RaiseTerm(Box::new(
+        "reduce: not implemented, use BinaryBackend fallback",
+    )))
 }
 #[rustler::nif(schedule = "DirtyCpu")]
 fn window_reduce<'a>(
@@ -2641,7 +2938,9 @@ fn window_reduce<'a>(
     _d: Term,
     _e: Term,
 ) -> NifResult<Term<'a>> {
-    Err(Error::RaiseTerm(Box::new("not implemented")))
+    Err(Error::RaiseTerm(Box::new(
+        "window_reduce: not implemented, use BinaryBackend fallback",
+    )))
 }
 #[rustler::nif(schedule = "DirtyCpu")]
 fn window_product<'a>(
@@ -2650,31 +2949,7 @@ fn window_product<'a>(
     _b: Vec<usize>,
     _c: Term,
 ) -> NifResult<Term<'a>> {
-    Err(Error::RaiseTerm(Box::new("not implemented")))
-}
-#[rustler::nif(schedule = "DirtyCpu")]
-fn bitcast_tensor<'a>(
-    env: Env<'a>,
-    _a: ResourceArc<BufResource>,
-    _b: String,
-) -> NifResult<Term<'a>> {
-    Err(Error::RaiseTerm(Box::new("not implemented")))
-}
-#[rustler::nif(schedule = "DirtyCpu")]
-fn gather<'a>(
-    env: Env<'a>,
-    _a: ResourceArc<BufResource>,
-    _b: ResourceArc<BufResource>,
-    _c: Term,
-) -> NifResult<Term<'a>> {
-    Err(Error::RaiseTerm(Box::new("not implemented")))
-}
-#[rustler::nif(schedule = "DirtyCpu")]
-fn put_slice<'a>(
-    env: Env<'a>,
-    _a: ResourceArc<BufResource>,
-    _b: Vec<usize>,
-    _c: ResourceArc<BufResource>,
-) -> NifResult<Term<'a>> {
-    Err(Error::RaiseTerm(Box::new("not implemented")))
+    Err(Error::RaiseTerm(Box::new(
+        "window_product: not implemented, use BinaryBackend fallback",
+    )))
 }

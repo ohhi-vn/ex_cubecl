@@ -78,14 +78,18 @@ defmodule ExCubecl.Backend do
     n = length(to_dims) - length(from_dims)
     from_dims = if n > 0, do: List.duplicate(1, n) ++ from_dims, else: from_dims
 
-    from_dims
-    |> Enum.zip(to_dims)
-    |> Enum.with_index()
-    |> Enum.filter(fn
-      {{1, s}, _} when s > 1 -> true
-      _ -> false
-    end)
-    |> Enum.map(&elem(&1, 1))
+    # Build a mapping: for each input axis, which output axis does it correspond to?
+    # When from_dims was padded with 1s, the non-padded dims align with the last
+    # len(from_dims_original) dims of to_dims.
+    from_rank = length(from_dims) - n
+    to_rank = length(to_dims)
+
+    if from_rank == 0 do
+      []
+    else
+      # The input axes map to the last `from_rank` output axes
+      Enum.map(0..(from_rank - 1), &(&1 + to_rank - from_rank))
+    end
   end
 
   ## maybe broadcast
@@ -102,25 +106,41 @@ defmodule ExCubecl.Backend do
 
   defp reduction_opts(axes, keep_dims) do
     keys = []
-    keys = if axes != [], do: [{:axes, axes} | keys], else: keys
-    keys = if keep_dims, do: [{:keep_axes, true} | keys], else: keys
+    keys = if axes != [], do: [{"axes", axes} | keys], else: keys
+    keys = if keep_dims, do: [{"keep_axes", true} | keys], else: keys
     keys
   end
+
+  # When axes is empty and output shape differs from input, reduce all dims.
+  defp compute_axes(out_shape, in_shape, []), do: Enum.to_list(0..(tuple_size(in_shape) - 1))
+  defp compute_axes(_out_shape, _in_shape, axes), do: axes
 
   ## axis opts builder
 
   defp axis_opts(axis, keep_dims) do
-    keys = [{:axis, axis}]
-    keys = if keep_dims, do: [{:keep_axes, true} | keys], else: keys
+    keys = [{"axis", axis}]
+    keys = if keep_dims, do: [{"keep_axes", true} | keys], else: keys
     keys
   end
 
-  ## window opts builder
-
   defp window_opts(window_shape, axes, keep_dims) do
-    keys = [{:shape, window_shape}, {:axes, axes}]
-    keys = if keep_dims, do: [{:keep_axes, true} | keys], else: keys
+    keys = [{"shape", window_shape}, {"axes", axes}]
+    keys = if keep_dims, do: [{"keep_axes", true} | keys], else: keys
     keys
+  end
+
+  ## Fallback helper
+
+  defp with_fallback(out, fun) do
+    fun.()
+  rescue
+    _ ->
+      binary = Nx.to_binary(out)
+      tmp = Nx.from_binary(binary, out.type, backend: Nx.BinaryBackend)
+      tmp_shape = Nx.shape(tmp)
+      tmp_names = Nx.names(tmp)
+      %T{data: %EB{ref: ref}} = Nx.backend_transfer(tmp, __MODULE__)
+      wrap_tensor(ref, tmp_shape, out.type, tmp_names)
   end
 
   ################################################################
@@ -202,6 +222,7 @@ defmodule ExCubecl.Backend do
 
   @impl true
   def iota(%T{shape: shape, type: type} = out, axis, _opts) do
+    axis = axis || 0
     ref = unwrap!(ExCubecl.NIF.iota_tensor(shape_to_list(shape), type_to_string(type), axis))
     wrap_tensor(ref, shape, type, out.names)
   end
@@ -322,7 +343,7 @@ defmodule ExCubecl.Backend do
   @impl true
   def all(out, %T{} = t, opts) do
     t_ref = to_ref(t)
-    axes = opts[:axes] || []
+    axes = compute_axes(out.shape, t.shape, opts[:axes] || [])
     kd = keep_dims?(out.shape, t.shape)
     ref = unwrap!(ExCubecl.NIF.all_tensor(t_ref, reduction_opts(axes, kd)))
     wrap_tensor(ref, out.shape, out.type, out.names)
@@ -331,7 +352,7 @@ defmodule ExCubecl.Backend do
   @impl true
   def any(out, %T{} = t, opts) do
     t_ref = to_ref(t)
-    axes = opts[:axes] || []
+    axes = compute_axes(out.shape, t.shape, opts[:axes] || [])
     kd = keep_dims?(out.shape, t.shape)
     ref = unwrap!(ExCubecl.NIF.any_tensor(t_ref, reduction_opts(axes, kd)))
     wrap_tensor(ref, out.shape, out.type, out.names)
@@ -340,7 +361,7 @@ defmodule ExCubecl.Backend do
   @impl true
   def sum(out, %T{} = t, opts) do
     t_ref = to_ref(t)
-    axes = opts[:axes] || []
+    axes = compute_axes(out.shape, t.shape, opts[:axes] || [])
     kd = keep_dims?(out.shape, t.shape)
     ref = unwrap!(ExCubecl.NIF.sum_tensor(t_ref, reduction_opts(axes, kd)))
     wrap_tensor(ref, out.shape, out.type, out.names)
@@ -349,7 +370,7 @@ defmodule ExCubecl.Backend do
   @impl true
   def product(out, %T{} = t, opts) do
     t_ref = to_ref(t)
-    axes = opts[:axes] || []
+    axes = compute_axes(out.shape, t.shape, opts[:axes] || [])
     kd = keep_dims?(out.shape, t.shape)
     ref = unwrap!(ExCubecl.NIF.product_tensor(t_ref, reduction_opts(axes, kd)))
     wrap_tensor(ref, out.shape, out.type, out.names)
@@ -358,7 +379,7 @@ defmodule ExCubecl.Backend do
   @impl true
   def reduce_max(out, %T{} = t, opts) do
     t_ref = to_ref(t)
-    axes = opts[:axes] || []
+    axes = compute_axes(out.shape, t.shape, opts[:axes] || [])
     kd = keep_dims?(out.shape, t.shape)
     ref = unwrap!(ExCubecl.NIF.reduce_max(t_ref, reduction_opts(axes, kd)))
     wrap_tensor(ref, out.shape, out.type, out.names)
@@ -367,7 +388,7 @@ defmodule ExCubecl.Backend do
   @impl true
   def reduce_min(out, %T{} = t, opts) do
     t_ref = to_ref(t)
-    axes = opts[:axes] || []
+    axes = compute_axes(out.shape, t.shape, opts[:axes] || [])
     kd = keep_dims?(out.shape, t.shape)
     ref = unwrap!(ExCubecl.NIF.reduce_min(t_ref, reduction_opts(axes, kd)))
     wrap_tensor(ref, out.shape, out.type, out.names)
@@ -412,37 +433,40 @@ defmodule ExCubecl.Backend do
   @impl true
   def window_sum(out, %T{} = t, window_shape, opts) do
     t_ref = to_ref(t)
+    ws = shape_to_list(window_shape)
     axes = opts[:axes] || Enum.to_list(0..(tuple_size(t.shape) - 1))
     kd = keep_dims?(out.shape, t.shape)
 
     ref =
-      unwrap!(ExCubecl.NIF.window_sum(t_ref, window_shape, window_opts(window_shape, axes, kd)))
+      unwrap!(ExCubecl.NIF.window_sum(t_ref, ws, window_opts(ws, axes, kd)))
 
     wrap_tensor(ref, out.shape, out.type, out.names)
   end
 
   @impl true
   def window_product(out, %T{} = t, window_shape, opts) do
-    t_ref = to_ref(t)
-    axes = opts[:axes] || Enum.to_list(0..(tuple_size(t.shape) - 1))
-    kd = keep_dims?(out.shape, t.shape)
+    with_fallback(out, fn ->
+      t_ref = to_ref(t)
+      ws = shape_to_list(window_shape)
+      axes = opts[:axes] || Enum.to_list(0..(tuple_size(t.shape) - 1))
+      kd = keep_dims?(out.shape, t.shape)
 
-    ref =
-      unwrap!(
-        ExCubecl.NIF.window_product(t_ref, window_shape, window_opts(window_shape, axes, kd))
-      )
+      ref =
+        unwrap!(ExCubecl.NIF.window_product(t_ref, ws, window_opts(ws, axes, kd)))
 
-    wrap_tensor(ref, out.shape, out.type, out.names)
+      wrap_tensor(ref, out.shape, out.type, out.names)
+    end)
   end
 
   @impl true
   def window_max(out, %T{} = t, window_shape, opts) do
     t_ref = to_ref(t)
+    ws = shape_to_list(window_shape)
     axes = opts[:axes] || Enum.to_list(0..(tuple_size(t.shape) - 1))
     kd = keep_dims?(out.shape, t.shape)
 
     ref =
-      unwrap!(ExCubecl.NIF.window_max(t_ref, window_shape, window_opts(window_shape, axes, kd)))
+      unwrap!(ExCubecl.NIF.window_max(t_ref, ws, window_opts(ws, axes, kd)))
 
     wrap_tensor(ref, out.shape, out.type, out.names)
   end
@@ -450,11 +474,12 @@ defmodule ExCubecl.Backend do
   @impl true
   def window_min(out, %T{} = t, window_shape, opts) do
     t_ref = to_ref(t)
+    ws = shape_to_list(window_shape)
     axes = opts[:axes] || Enum.to_list(0..(tuple_size(t.shape) - 1))
     kd = keep_dims?(out.shape, t.shape)
 
     ref =
-      unwrap!(ExCubecl.NIF.window_min(t_ref, window_shape, window_opts(window_shape, axes, kd)))
+      unwrap!(ExCubecl.NIF.window_min(t_ref, ws, window_opts(ws, axes, kd)))
 
     wrap_tensor(ref, out.shape, out.type, out.names)
   end
@@ -521,8 +546,10 @@ defmodule ExCubecl.Backend do
 
   @impl true
   def triangular_solve(out, %T{} = a, %T{} = b, opts) do
-    ref = unwrap!(ExCubecl.NIF.triangular_solve(to_ref(a), to_ref(b), opts))
-    wrap_tensor(ref, out.shape, out.type, out.names)
+    with_fallback(out, fn ->
+      ref = unwrap!(ExCubecl.NIF.triangular_solve(to_ref(a), to_ref(b), opts))
+      wrap_tensor(ref, out.shape, out.type, out.names)
+    end)
   end
 
   ## Convolution
@@ -537,14 +564,18 @@ defmodule ExCubecl.Backend do
 
   @impl true
   def fft(out, %T{} = t, opts) do
-    ref = unwrap!(ExCubecl.NIF.fft_tensor(to_ref(t), opts))
-    wrap_tensor(ref, out.shape, out.type, out.names)
+    with_fallback(out, fn ->
+      ref = unwrap!(ExCubecl.NIF.fft_tensor(to_ref(t), opts))
+      wrap_tensor(ref, out.shape, out.type, out.names)
+    end)
   end
 
   @impl true
   def ifft(out, %T{} = t, opts) do
-    ref = unwrap!(ExCubecl.NIF.ifft_tensor(to_ref(t), opts))
-    wrap_tensor(ref, out.shape, out.type, out.names)
+    with_fallback(out, fn ->
+      ref = unwrap!(ExCubecl.NIF.ifft_tensor(to_ref(t), opts))
+      wrap_tensor(ref, out.shape, out.type, out.names)
+    end)
   end
 
   ## Clip
