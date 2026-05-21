@@ -24,3 +24,5 @@ num_cpus = "1"
 [features]
 default = []
 # gpu = ["cubecl"]
+
+[workspace]

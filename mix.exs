@@ -1,7 +1,7 @@
 defmodule ExCubecl.MixProject do
   use Mix.Project
 
-  @version "0.2.1"
+  @version "0.2.2"
   @source_url "https://github.com/ohhi-vn/ex_cubecl"
 
   def project do
@@ -61,8 +61,11 @@ defmodule ExCubecl.MixProject do
       name: "ex_cubecl",
       files: ~w(
         lib
-        native
         priv
+        native/ex_cubecl_nif/Cargo.toml
+        native/ex_cubecl_nif/Cargo.lock
+        native/ex_cubecl_nif/src
+        native/ex_cubecl_nif/include
         guides
         examples
         .formatter.exs
