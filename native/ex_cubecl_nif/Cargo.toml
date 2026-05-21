@@ -1,9 +1,9 @@
 [package]
 name = "ex_cubecl_nif"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "Apache-2.0"
-description = "Nx backend for CubeCL via Rust NIFs"
+description = "GPU compute runtime for CubeCL via Rust NIFs"
 repository = "https://github.com/tracel-ai/cubecl"
 
 [lib]
@@ -12,8 +12,10 @@ crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 rustler = "0.37"
-half = "2"
-bytemuck = "1"
+dashmap = "6"
+parking_lot = "0.12"
+lazy_static = "1"
+num_cpus = "1"
 
 # NOTE: CubeCL GPU integration is prepared but commented out until the crate
 # is published with the needed features. Uncomment when ready:

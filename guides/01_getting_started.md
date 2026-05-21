@@ -1,134 +1,112 @@
-# Getting Started with ExCubecl
+# Getting Started
 
-## What is ExCubecl?
-
-ExCubecl is an [Nx](https://github.com/elixir-nx/nx) backend that powers tensor operations through Rust NIFs (Native Implemented Functions). It provides a high-performance compute layer for Elixir's numerical computing ecosystem, with support for CPU computation today and GPU acceleration (via CubeCL) planned for the future.
-
-## Architecture Overview
-
-```
-┌─────────────────────────────────────────────────────┐
-│                  Elixir / Nx                         │
-│   Nx.add(a, b)  →  ExCubecl.Backend.add/3           │
-├─────────────────────────────────────────────────────┤
-│              ExCubecl.Backend                        │
-│   - Type conversion, broadcasting, fallback          │
-├─────────────────────────────────────────────────────┤
-│              ExCubecl.NIF (Elixir)                   │
-│   - NIF function stubs                               │
-├─────────────────────────────────────────────────────┤
-│              Rust NIF (lib.rs)                       │
-│   - Tensor operations on CPU                         │
-│   - Integer-aware paths (no f64 roundtrip)           │
-├─────────────────────────────────────────────────────┤
-│              C FFI (ffi.rs + ex_cubecl.h)            │
-│   - Mobile platform interface (iOS/Android)          │
-└─────────────────────────────────────────────────────┘
-```
+ExCubecl is a GPU compute runtime for Elixir. It provides GPU buffer management, kernel execution, async command submission, and pipeline orchestration via CubeCL (Rust NIFs).
 
 ## Installation
 
-Add `ex_cubecl` to your `mix.exs`:
+Add to your `mix.exs`:
 
 ```elixir
 def deps do
-  [
-    {:ex_cubecl, "~> 0.1.0"}
-  ]
+  [{:ex_cubecl, "~> 0.2.0"}]
 end
 ```
 
-Then run:
+Then run `mix deps.get`.
 
-```bash
-mix deps.get
-mix compile
+## Architecture
+
+```
+Elixir → ExCubecl.NIF → Rust NIF → CubeCL Runtime
 ```
 
-## Quick Start
+All GPU state lives in Rust — not in BEAM memory. The Elixir side manages handles, orchestrates pipelines, and schedules work.
+
+## Core Concepts
+
+### Buffers
+
+Buffers are the primary data structure, representing GPU memory holding typed, shaped data:
 
 ```elixir
-# Create a tensor
-t = Nx.tensor([1.0, 2.0, 3.0], backend: ExCubecl.Backend)
+# Create a buffer from a list
+{:ok, buf} = ExCubecl.buffer([1.0, 2.0, 3.0], [3], :f32)
 
-# Basic arithmetic
-Nx.add(t, t)        # [2.0, 4.0, 6.0]
-Nx.multiply(t, t)   # [1.0, 4.0, 9.0]
+# Inspect
+{:ok, [3]} = ExCubecl.shape(buf)
+{:ok, "f32"} = ExCubecl.dtype(buf)
+{:ok, 12} = ExCubecl.size(buf)   # bytes
 
-# Shape operations
-Nx.reshape(t, {3, 1})
-Nx.transpose(Nx.tensor([[1.0, 2.0], [3.0, 4.0]]))
+# Read data back
+{:ok, data} = ExCubecl.read(buf)
 
-# Reductions
-Nx.sum(t)           # 6.0
-Nx.argmax(t)        # 2
-
-# Type conversion
-Nx.as_type(t, {:s, 32})
-
-# Transfer between backends
-binary = Nx.to_binary(t)
-Nx.from_binary(binary, {:f, 32}, backend: ExCubecl.Backend)
+# Free when done
+:ok = ExCubecl.free(buf)
 ```
 
-## Supported Data Types
+### Kernels
 
-| Type    | Description                | Size    |
-|---------|----------------------------|---------|
-| `{:f, 32}` | 32-bit float             | 4 bytes |
-| `{:f, 64}` | 64-bit float             | 8 bytes |
-| `{:s, 32}` | 32-bit signed integer    | 4 bytes |
-| `{:s, 64}` | 64-bit signed integer    | 8 bytes |
-| `{:u, 32}` | 32-bit unsigned integer  | 4 bytes |
-| `{:u, 8}`  | 8-bit unsigned integer   | 1 byte  |
-
-Note: `{:f, 16}` and `{:bf, 16}` are automatically converted to `{:f, 32}`.
-
-## Hardware Support
-
-### Currently Active
-- **CPU**: All platforms (macOS x86_64/ARM64, Linux x86_64, Windows x86_64)
-- **iOS**: C FFI via static library (Objective-C / Swift bridging)
-- **Android**: C FFI via static library (JNI)
-
-### Planned
-- **GPU**: Via CubeCL/WGPU (macOS Metal, Linux Vulkan, Windows DirectX/Vulkan, iOS Metal, Android Vulkan)
-
-## Backend Fallback
-
-Operations not yet implemented in the NIF layer automatically fall back to `Nx.BinaryBackend`. This means you can use the full Nx API even if some operations aren't accelerated yet.
+Kernels are GPU programs that operate on buffers:
 
 ```elixir
-# This will use BinaryBackend fallback if FFT is not in Nx
-Nx.fft(tensor)
+{:ok, input} = ExCubecl.buffer([1.0, 2.0, 3.0], [3], :f32)
+{:ok, output} = ExCubecl.buffer([0.0, 0.0, 0.0], [3], :f32)
+
+{:ok, _cmd} = ExCubecl.run_kernel("elementwise_add", [input], output, %{})
 ```
 
-## Checking Backend Availability
+### Async Execution
+
+Submit work without blocking the BEAM:
 
 ```elixir
-# Check if NIF is loaded
-ExCubecl.available?()
+{:ok, cmd_id} = ExCubecl.submit("some_command")
 
-# Get device info
-ExCubecl.device_info()
-# %{backend: :cpu, name: "ExCubecl CPU (Rust NIF)", version: "0.1.0", gpu: false, mobile_ffi: true}
+# Poll for status
+{:ok, :completed} = ExCubecl.poll(cmd_id)
 
-# List supported types
-ExCubecl.supported_types()
-# [{:f, 32}, {:f, 64}, {:s, 32}, {:s, 64}, {:u, 32}, {:u, 8}]
+# Or block until done
+:ok = ExCubecl.wait(cmd_id)
 ```
 
-## Next Guides
+### Pipelines
 
-- [Binary Operations](02_binary_ops.md)
-- [Unary Operations](03_unary_ops.md)
-- [Shape Operations](04_shape_ops.md)
-- [Reductions](05_reductions.md)
-- [Type Conversion](06_type_conversion.md)
-- [Creation Helpers](07_creation.md)
-- [Sorting](08_sorting.md)
-- [Linear Algebra](09_linalg.md)
-- [Window Operations](10_window_ops.md)
-- [Indexed Operations](11_indexed_ops.md)
-- [Mobile Integration](12_mobile.md)
-- [Examples](13_examples.md)
+Compose multiple GPU operations into a single executable graph:
+
+```elixir
+{:ok, pipeline} = ExCubecl.pipeline()
+
+:ok = ExCubecl.pipeline_add(pipeline, "elementwise_add:1,2:3")
+:ok = ExCubecl.pipeline_add(pipeline, "relu:3,4")
+
+{:ok, _cmd_ids} = ExCubecl.pipeline_run(pipeline)
+:ok = ExCubecl.pipeline_free(pipeline)
+```
+
+## Supported Types
+
+| Type  | Description             |
+|-------|-------------------------|
+| `:f32`| 32-bit float            |
+| `:f64`| 64-bit float            |
+| `:s32`| 32-bit signed integer   |
+| `:s64`| 64-bit signed integer   |
+| `:u32`| 32-bit unsigned integer |
+| `:u8` | 8-bit unsigned integer  |
+
+## Checking Availability
+
+```elixir
+ExCubecl.available?()    # true if NIF is loaded
+ExCubecl.version()       # "0.2.0"
+ExCubecl.device_info()   # %{device_name: "...", device_type: "gpu", ...}
+ExCubecl.device_count()  # 1
+```
+
+## Next Steps
+
+- [Buffer Management](02_buffers.md) — creating, reading, inspecting, freeing buffers
+- [Kernel Execution](03_kernels.md) — running GPU kernels
+- [Async & Pipelines](04_async_pipelines.md) — non-blocking execution and pipeline orchestration
+- [Mobile Integration](05_mobile.md) — iOS/Android C FFI
+- [Examples](06_examples.md) — complete end-to-end examples

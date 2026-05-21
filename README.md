@@ -1,19 +1,39 @@
-[![Hex.pm](https://img.shields.io/hexpm/v/ex_cubecl.svg)](https://hex.pm/packages/ex_cubecl)
-[![Docs](https://img.shields.io/badge/docs-hexdocs-blue.svg)](https://hexdocs.pm/ex_cubecl)
-
-> **Status:** Early development. Not yet ready for production use.
-
 # ExCubecl
 
-**ExCubecl** is an [Nx](https://github.com/elixir-nx/nx) backend powered by [CubeCL](https://github.com/tracel-ai/cubecl) via Rust NIFs. It provides efficient tensor operations with support for CPU computation today and GPU acceleration (via CubeCL) coming soon.
+**ExCubecl** is a GPU compute runtime for Elixir, powered by [CubeCL](https://github.com/tracel-ai/cubecl) via Rust NIFs.
 
-## Features
+It provides GPU buffer management, kernel execution, async command submission, and pipeline orchestration — designed for AI inference, media processing, and realtime GPU effects on mobile and desktop.
 
-- **Nx Backend**: Full integration with the Nx tensor library
-- **Rust NIFs**: High-performance tensor operations via Rust
-- **Mobile Support**: C FFI layer for iOS (Objective-C/Swift) and Android (JNI)
-- **Graceful Fallback**: Operations not yet implemented in NIF fall back to `Nx.BinaryBackend`
-- **Type Support**: `f32`, `f64`, `s32`, `s64`, `u32`, `u8`
+## Architecture
+
+```
+┌─────────────────────────────────────────────┐
+│              Elixir / BEAM                   │
+│  ExCubecl.buffer(...)                       │
+│  ExCubecl.run_kernel(:blur, ...)            │
+│  ExCubecl.pipeline() |> pipeline_run()      │
+├─────────────────────────────────────────────┤
+│           ExCubecl.NIF (Elixir)              │
+│  - NIF function stubs                        │
+├─────────────────────────────────────────────┤
+│           Rust NIF (lib.rs)                  │
+│  - GPU device management                     │
+│  - Buffer pool / Texture pool                │
+│  - Kernel cache                              │
+│  - Async command queue                       │
+│  - Stream scheduler                          │
+├─────────────────────────────────────────────┤
+│           CubeCL Runtime                     │
+│  - GPU kernel compilation                    │
+│  - Buffer management                         │
+│  - Dispatch execution                        │
+│  - Synchronization                           │
+├─────────────────────────────────────────────┤
+│           C FFI (ex_cubecl.h)                │
+│  - Mobile platform interface                 │
+│  - iOS / Android interop                     │
+└─────────────────────────────────────────────┘
+```
 
 ## Installation
 
@@ -22,7 +42,7 @@ Add `ex_cubecl` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:ex_cubecl, "~> 0.1.0"}
+    {:ex_cubecl, "~> 0.2.0"}
   ]
 end
 ```
@@ -30,47 +50,55 @@ end
 ## Quick Start
 
 ```elixir
-# Create tensors
-a = Nx.tensor([1.0, 2.0, 3.0], backend: ExCubecl.Backend)
-b = Nx.tensor([4.0, 5.0, 6.0], backend: ExCubecl.Backend)
+# Check device
+ExCubecl.device_info()
+%{name: "ExCubecl CPU (Rust NIF)", gpu: false, version: "0.2.0"}
 
-# Basic operations
-Nx.add(a, b)        # [5.0, 7.0, 9.0]
-Nx.multiply(a, b)   # [4.0, 10.0, 18.0]
-Nx.sum(a)           # 6.0
+# Create GPU buffers
+a = ExCubecl.buffer([1.0, 2.0, 3.0], {3}, :f32)
+b = ExCubecl.buffer([4.0, 5.0, 6.0], {3}, :f32)
 
-# Shape operations
-Nx.reshape(a, {3, 1})
-Nx.transpose(Nx.tensor([[1.0, 2.0], [3.0, 4.0]]))
+# Inspect
+ExCubecl.shape(a)   # {3}
+ExCubecl.dtype(a)   # :f32
+ExCubecl.size(a)    # 12 (bytes)
 
-# Reductions
-Nx.sum(a, axes: [0])
-Nx.argmax(a)
+# Read data back
+data = ExCubecl.read(a)
 
-# Type conversion
-Nx.as_type(a, {:s, 32})
+# Run a kernel
+output = ExCubecl.buffer([0.0, 0.0, 0.0], {3}, :f32)
+ExCubecl.run_kernel(:elementwise_add, [a], output, %{})
 
-# Transfer to/from other backends
-binary = Nx.to_binary(a)
-Nx.from_binary(binary, {:f, 32}, backend: ExCubecl.Backend)
+# Async execution
+cmd_id = ExCubecl.submit(%{op: :run_kernel, kernel: :relu, inputs: [a], output: output, params: %{}})
+ExCubecl.poll(cmd_id)   # :pending | :completed | {:error, reason}
+ExCubecl.wait(cmd_id)   # blocks until done
+
+# Pipeline orchestration
+pipeline = ExCubecl.pipeline()
+pipeline
+|> ExCubecl.pipeline_add(%{op: :run_kernel, kernel: :blur, inputs: [a], output: b, params: %{}})
+|> ExCubecl.pipeline_add(%{op: :run_kernel, kernel: :relu, inputs: [b], output: output, params: %{}})
+ExCubecl.pipeline_run(pipeline)
+
+# Cleanup
+ExCubecl.free(a)
+ExCubecl.free(b)
+ExCubecl.free(output)
+ExCubecl.free_pipeline(pipeline)
 ```
 
-## Supported Operations
+## Supported Types
 
-| Category | Operations |
-|----------|-----------|
-| **Binary** | `add`, `subtract`, `multiply`, `divide`, `pow`, `remainder`, `atan2`, `min`, `max`, `quotient`, `bitwise_and`, `bitwise_or`, `bitwise_xor`, `left_shift`, `right_shift` |
-| **Comparison** | `equal`, `not_equal`, `greater`, `less`, `greater_equal`, `less_equal`, `logical_and`, `logical_or`, `logical_xor` |
-| **Unary** | `negate`, `abs`, `exp`, `log`, `sqrt`, `sin`, `cos`, `tan`, `sigmoid`, `relu`, `expm1`, `log1p`, `cosh`, `sinh`, `tanh`, `acos`, `asin`, `atan`, `acosh`, `asinh`, `atanh`, `rsqrt`, `cbrt`, `erf`, `erfc`, `erf_inv`, `bitwise_not`, `ceil`, `floor`, `round`, `sign`, `conjugate`, `count_leading_zeros`, `population_count`, `real`, `imag`, `is_nan`, `is_infinity` |
-| **Shape** | `reshape`, `squeeze`, `broadcast`, `transpose`, `pad`, `reverse`, `slice`, `concatenate`, `stack`, `select` |
-| **Reductions** | `sum`, `product`, `reduce_max`, `reduce_min`, `all`, `any`, `argmax`, `argmin` |
-| **Window** | `window_sum`, `window_max`, `window_min` |
-| **LinAlg** | `dot`, `conv` |
-| **Sorting** | `sort`, `argsort` |
-| **Type** | `as_type`, `bitcast`, `constant`, `eye`, `iota` |
-| **Indexed** | `indexed_add`, `indexed_put`, `gather`, `put_slice` |
-
-Operations not yet implemented in the NIF layer (e.g., `fft`, `ifft`, `triangular_solve`) automatically fall back to `Nx.BinaryBackend`.
+| Type  | Description            |
+|-------|------------------------|
+| `:f32`| 32-bit float           |
+| `:f64`| 64-bit float           |
+| `:s32`| 32-bit signed integer  |
+| `:s64`| 64-bit signed integer  |
+| `:u32`| 32-bit unsigned integer|
+| `:u8` | 8-bit unsigned integer |
 
 ## Mobile Integration (iOS / Android)
 
@@ -81,23 +109,16 @@ ExCubecl includes a C FFI layer for mobile platform integration.
 ```objc
 #include "ex_cubecl.h"
 
-// Create tensors
 float data[] = {1.0f, 2.0f, 3.0f};
 size_t shape[] = {3};
-ex_cubecl_tensor_handle_t a = ex_cubecl_new_tensor((const uint8_t*)data, shape, 1, EX_CUBECL_DTYPE_F32);
-ex_cubecl_tensor_handle_t b = ex_cubecl_new_tensor((const uint8_t*)data, shape, 1, EX_CUBECL_DTYPE_F32);
+ex_cubecl_buffer_handle_t buf = ex_cubecl_buffer_new(
+    (const uint8_t*)data, shape, 1, EX_CUBECL_DTYPE_F32
+);
 
-// Add
-ex_cubecl_tensor_handle_t result = ex_cubecl_add(a, b);
-
-// Read result
 float out[3];
-ex_cubecl_read_tensor(result, (uint8_t*)out, sizeof(out));
+ex_cubecl_buffer_read(buf, (uint8_t*)out, sizeof(out));
 
-// Cleanup
-ex_cubecl_deallocate_tensor(a);
-ex_cubecl_deallocate_tensor(b);
-ex_cubecl_deallocate_tensor(result);
+ex_cubecl_buffer_free(buf);
 ```
 
 ### Android (JNI)
@@ -107,46 +128,61 @@ ex_cubecl_deallocate_tensor(result);
 #include <jni.h>
 
 JNIEXPORT jlong JNICALL
-Java_com_example_excubecl_ExCubeclTensor_add(
-    JNIEnv *env, jobject thiz, jlong a_handle, jlong b_handle) {
-    return (jlong)ex_cubecl_add((ex_cubecl_tensor_handle_t)a_handle,
-                                 (ex_cubecl_tensor_handle_t)b_handle);
+Java_com_example_excubecl_ExCubeclBuffer_create(
+    JNIEnv *env, jobject thiz, jbyteArray data, jlongArray shape, jint dtype) {
+    jsize data_len = (*env)->GetArrayLength(env, data);
+    jbyte *data_ptr = (*env)->GetByteArrayElements(env, data, NULL);
+    jlong *shape_ptr = (*env)->GetLongArrayElements(env, shape, NULL);
+    jsize ndim = (*env)->GetArrayLength(env, shape);
+
+    ex_cubecl_buffer_handle_t handle = ex_cubecl_buffer_new(
+        (const uint8_t*)data_ptr, (const size_t*)shape_ptr, ndim, dtype
+    );
+
+    (*env)->ReleaseByteArrayElements(env, data, data_ptr, 0);
+    (*env)->ReleaseLongArrayElements(env, shape, shape_ptr, 0);
+
+    return (jlong)handle;
 }
 ```
 
 See `native/ex_cubecl_nif/include/ex_cubecl.h` for the full API reference.
 
-## Architecture
+## Use Cases
 
+### GPU Image Processing
 ```
-┌─────────────────────────────────────────────┐
-│              Elixir / Nx                     │
-│  Nx.add(a, b)  →  ExCubecl.Backend.add/3   │
-├─────────────────────────────────────────────┤
-│           ExCubecl.Backend                   │
-│  - Type conversion, broadcasting, fallback   │
-├─────────────────────────────────────────────┤
-│           ExCubecl.NIF (Elixir)              │
-│  - NIF function stubs                        │
-├─────────────────────────────────────────────┤
-│           Rust NIF (lib.rs)                  │
-│  - Tensor operations on CPU                  │
-│  - Integer-aware paths (no f64 roundtrip)    │
-├─────────────────────────────────────────────┤
-│           C FFI (ffi.rs + ex_cubecl.h)       │
-│  - Mobile platform interface                 │
-│  - Handle-based tensor management            │
-└─────────────────────────────────────────────┘
+camera frame → GPU texture → CubeCL kernel → screen render
 ```
+Blur, sharpen, denoise, beauty filters, LUT filters — all without CPU copies.
 
-## GPU Support (Coming Soon)
-
-GPU acceleration via CubeCL is prepared but requires the CubeCL crate to be published with the needed features. When available, uncomment the `cubecl` dependency in `native/ex_cubecl_nif/Cargo.toml` and enable the `gpu` feature:
-
-```bash
-mix compile --features gpu
+### AI Inference
 ```
+tensor → CubeCL kernels → prediction
+```
+Segmentation, face landmarks, pose detection, embeddings — realtime camera AI.
+
+### Video Processing
+```
+video texture → GPU kernels → encoder
+```
+Compositing, transitions, overlays, subtitles, color grading.
+
+### Livestream Effects
+```
+camera → AI segmentation → background replacement → stream encoder
+```
+Virtual background, AR effects, realtime filters — all GPU-native.
+
+## Evolution Path
+
+| Phase | Focus                          | Status        |
+|-------|--------------------------------|---------------|
+| 1     | GPU compute runtime            | ✅ Current    |
+| 2     | Media runtime (video/camera)   | 🔜 Planned    |
+| 3     | AI runtime (inference)         | 🔜 Planned    |
+| 4     | Nx integration (Axon/training) | 🔜 Planned    |
 
 ## License
 
-Apache 2.0 - See [LICENSE](LICENSE) for details.
+Apache 2.0 — See [LICENSE](LICENSE) for details.
