@@ -22,7 +22,10 @@ num_cpus = "1"
 # cubecl = { version = "0.1", features = ["wgpu"], optional = true }
 
 [features]
-default = []
-# gpu = ["cubecl"]
+default = ["wgpu"]
+wgpu = []
+cuda = []
+metal = []
+rocm = []
 
 [workspace]

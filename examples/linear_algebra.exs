@@ -21,7 +21,7 @@ IO.puts("Matrix B: shape=#{inspect(shape_b)}")
 IO.puts("Output buffer: shape=#{inspect(shape_o)}")
 
 # Run matmul kernel
-{:ok, _cmd} = ExCubecl.run_kernel("matmul", [a, b], output, %{})
+{:ok, _cmd} = ExCubecl.run_kernel("matmul", [a, b], output)
 IO.puts("Matmul kernel executed")
 
 # Read result
@@ -33,11 +33,7 @@ IO.puts("Result data: #{byte_size(result)} bytes")
 {:ok, shape_e} = ExCubecl.shape(eye)
 IO.puts("Identity matrix: shape=#{inspect(shape_e)}")
 
-# Cleanup
-ExCubecl.free(a)
-ExCubecl.free(b)
-ExCubecl.free(output)
-ExCubecl.free(eye)
+# Buffers are automatically freed when GC'd — no manual free needed
 
 IO.puts("")
 IO.puts("=== Done ===")

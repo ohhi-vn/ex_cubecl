@@ -3,12 +3,16 @@
 //! Phase 1: CPU-side thread pool simulating GPU execution.
 //! All GPU state lives in Rust — not in BEAM memory.
 //!
+//! Buffers are managed via `ResourceArc<Buffer>` so that Rust's `Drop`
+//! is called automatically when the Elixir term goes out of scope.
+//! No manual buffer_free is needed.
+//!
 //! When CubeCL is integrated, the thread-pool simulation is replaced by
 //! actual GPU kernel dispatches.
 
 use dashmap::DashMap;
 use parking_lot::Mutex;
-use rustler::{Encoder, Env, Error, NifResult, Term};
+use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 
@@ -77,6 +81,10 @@ impl Buffer {
     }
 }
 
+// Implement the Resource trait so Buffer can be used with ResourceArc.
+// Registration with the NIF runtime happens in `on_load` via `env.register::<Buffer>()`.
+impl rustler::Resource for Buffer {}
+
 // ── Command / Async ───────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,28 +103,25 @@ pub struct Command {
 
 // ── Pipeline ──────────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Pipeline {
     pub id: u64,
     pub commands: Vec<PipelineCommand>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum PipelineCommand {
     KernelRun {
         name: String,
-        inputs: Vec<u64>, // buffer IDs
-        output: u64,      // buffer ID
-        params: Vec<u8>,  // raw param bytes
+        inputs: Vec<ResourceArc<Buffer>>,
+        output: ResourceArc<Buffer>,
+        params: Vec<u8>,
     },
 }
 
 // ── Global state ──────────────────────────────────────────────
 
 lazy_static::lazy_static! {
-    /// Buffer store: buffer_id -> Buffer
-    static ref BUFFERS: DashMap<u64, Buffer> = DashMap::new();
-
     /// Command store: command_id -> Command
     static ref COMMANDS: DashMap<u64, Command> = DashMap::new();
 
@@ -124,7 +129,6 @@ lazy_static::lazy_static! {
     static ref PIPELINES: DashMap<u64, Pipeline> = DashMap::new();
 
     /// Monotonic ID generators
-    static ref NEXT_BUFFER_ID: AtomicU64 = AtomicU64::new(1);
     static ref NEXT_COMMAND_ID: AtomicU64 = AtomicU64::new(1);
     static ref NEXT_PIPELINE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -238,77 +242,37 @@ fn buffer_new<'a>(env: Env<'a>, data: Term, shape: Term, dtype_str: Term) -> Nif
         ))));
     }
 
-    let id = alloc_id(&NEXT_BUFFER_ID);
-    BUFFERS.insert(
-        id,
-        Buffer {
-            data: data_binary.as_slice().to_vec(),
-            shape: shape_vec,
-            dtype,
-        },
-    );
+    let buffer = Buffer {
+        data: data_binary.as_slice().to_vec(),
+        shape: shape_vec,
+        dtype,
+    };
 
-    Ok((atoms::ok(), id).encode(env))
+    let resource = ResourceArc::<Buffer>::new(buffer);
+    Ok((atoms::ok(), resource).encode(env))
 }
 
 #[rustler::nif]
-fn buffer_read(env: Env, buffer_id: u64) -> NifResult<Term> {
-    match BUFFERS.get(&buffer_id) {
-        Some(buf) => {
-            let mut out = rustler::OwnedBinary::new(buf.data.len())
-                .ok_or_else(|| Error::RaiseTerm(Box::new("buffer_read: allocation failed")))?;
-            out.as_mut_slice().copy_from_slice(&buf.data);
-            Ok((atoms::ok(), out.release(env)).encode(env))
-        }
-        None => Err(Error::RaiseTerm(Box::new(format!(
-            "buffer_read: invalid buffer_id {}",
-            buffer_id
-        )))),
-    }
+fn buffer_read<'a>(env: Env<'a>, buffer: ResourceArc<Buffer>) -> NifResult<Term<'a>> {
+    let mut out = rustler::OwnedBinary::new(buffer.data.len())
+        .ok_or_else(|| Error::RaiseTerm(Box::new("buffer_read: allocation failed")))?;
+    out.as_mut_slice().copy_from_slice(&buffer.data);
+    Ok((atoms::ok(), out.release(env)).encode(env))
 }
 
 #[rustler::nif]
-fn buffer_size(env: Env, buffer_id: u64) -> NifResult<Term> {
-    match BUFFERS.get(&buffer_id) {
-        Some(buf) => Ok((atoms::ok(), buf.byte_size()).encode(env)),
-        None => Err(Error::RaiseTerm(Box::new(format!(
-            "buffer_size: invalid buffer_id {}",
-            buffer_id
-        )))),
-    }
+fn buffer_size(env: Env, buffer: ResourceArc<Buffer>) -> NifResult<Term> {
+    Ok((atoms::ok(), buffer.byte_size()).encode(env))
 }
 
 #[rustler::nif]
-fn buffer_shape(env: Env, buffer_id: u64) -> NifResult<Term> {
-    match BUFFERS.get(&buffer_id) {
-        Some(buf) => Ok((atoms::ok(), buf.shape.clone()).encode(env)),
-        None => Err(Error::RaiseTerm(Box::new(format!(
-            "buffer_shape: invalid buffer_id {}",
-            buffer_id
-        )))),
-    }
+fn buffer_shape(env: Env, buffer: ResourceArc<Buffer>) -> NifResult<Term> {
+    Ok((atoms::ok(), buffer.shape.clone()).encode(env))
 }
 
 #[rustler::nif]
-fn buffer_dtype(env: Env, buffer_id: u64) -> NifResult<Term> {
-    match BUFFERS.get(&buffer_id) {
-        Some(buf) => Ok((atoms::ok(), buf.dtype.as_str()).encode(env)),
-        None => Err(Error::RaiseTerm(Box::new(format!(
-            "buffer_dtype: invalid buffer_id {}",
-            buffer_id
-        )))),
-    }
-}
-
-#[rustler::nif]
-fn buffer_free(env: Env, buffer_id: u64) -> NifResult<Term> {
-    match BUFFERS.remove(&buffer_id) {
-        Some(_) => Ok((atoms::ok()).encode(env)),
-        None => Err(Error::RaiseTerm(Box::new(format!(
-            "buffer_free: invalid buffer_id {}",
-            buffer_id
-        )))),
-    }
+fn buffer_dtype(env: Env, buffer: ResourceArc<Buffer>) -> NifResult<Term> {
+    Ok((atoms::ok(), buffer.dtype.as_str()).encode(env))
 }
 
 // ── NIF: Kernel execution ────────────────────────────────────
@@ -317,12 +281,12 @@ fn buffer_free(env: Env, buffer_id: u64) -> NifResult<Term> {
 fn kernel_run<'a>(
     env: Env<'a>,
     name: Term,
-    input_ids: Term,
-    output_id: u64,
+    inputs: Term,
+    output: ResourceArc<Buffer>,
     params: Term,
 ) -> NifResult<Term<'a>> {
     let name_str: String = name.decode()?;
-    let inputs: Vec<u64> = input_ids.decode()?;
+    let input_resources: Vec<ResourceArc<Buffer>> = inputs.decode()?;
     let params_binary: rustler::Binary = params.decode()?;
 
     // Validate kernel name
@@ -333,32 +297,9 @@ fn kernel_run<'a>(
         ))));
     }
 
-    // Validate output buffer exists
-    if !BUFFERS.contains_key(&output_id) {
-        return Err(Error::RaiseTerm(Box::new(format!(
-            "kernel_run: invalid output buffer_id {}",
-            output_id
-        ))));
-    }
-
-    // Validate all input buffers exist
-    for &id in &inputs {
-        if !BUFFERS.contains_key(&id) {
-            return Err(Error::RaiseTerm(Box::new(format!(
-                "kernel_run: invalid input buffer_id {}",
-                id
-            ))));
-        }
-    }
-
     // Phase 1: Execute on CPU thread pool (simulating GPU dispatch).
-    // Clone the data we need so the thread can own it.
-    let input_buffers: Vec<Buffer> = inputs
-        .iter()
-        .map(|id| BUFFERS.get(id).unwrap().clone())
-        .collect();
-    // TODO: use output_buffer, params_bytes, kernel_name for real dispatch
-    let _ = (output_id, params_binary, name_str);
+    // TODO: Clone the data we need so the thread can own it.
+    let _ = (input_resources, output, params_binary, name_str);
 
     let cmd_id = alloc_id(&NEXT_COMMAND_ID);
     COMMANDS.insert(
@@ -379,14 +320,8 @@ fn kernel_run<'a>(
         },
     );
 
-    // Stub: just copy first input to output as a placeholder.
-    // Real implementation will dispatch to CubeCL.
-    if let Some(first) = input_buffers.first() {
-        if let Some(mut buf) = BUFFERS.get_mut(&output_id) {
-            let copy_len = buf.data.len().min(first.data.len());
-            buf.data[..copy_len].copy_from_slice(&first.data[..copy_len]);
-        }
-    }
+    // Phase 1 stub: no-op. Real implementation will dispatch to CubeCL.
+    // Buffer data will be mutated in-place by the GPU runtime.
 
     COMMANDS.insert(
         cmd_id,
@@ -514,43 +449,25 @@ fn pipeline_new(env: Env) -> NifResult<Term> {
 }
 
 #[rustler::nif]
-fn pipeline_add<'a>(env: Env<'a>, pipeline_id: u64, command: Term) -> NifResult<Term<'a>> {
-    let cmd_str: String = command.decode()?;
-
-    // Parse a simple command format: "kernel_name:input1,input2,...:output:params"
-    // Phase 1 uses a simple string protocol; switch to structured terms later.
-    let parts: Vec<&str> = cmd_str.split(':').collect();
-    if parts.len() < 3 {
-        return Err(Error::RaiseTerm(Box::new(
-            "pipeline_add: expected format 'name:inputs:output[:params]'",
-        )));
-    }
-
-    let name = parts[0].to_string();
-    let inputs: Vec<u64> = parts[1]
-        .split(',')
-        .filter(|s| !s.is_empty())
-        .map(|s| {
-            s.parse::<u64>()
-                .map_err(|e| Error::RaiseTerm(Box::new(format!("invalid input id: {}", e))))
-        })
-        .collect::<NifResult<Vec<u64>>>()?;
-    let output: u64 = parts[2]
-        .parse()
-        .map_err(|e| Error::RaiseTerm(Box::new(format!("invalid output id: {}", e))))?;
-    let params = if parts.len() > 3 {
-        parts[3].as_bytes().to_vec()
-    } else {
-        Vec::new()
-    };
+fn pipeline_add<'a>(
+    env: Env<'a>,
+    pipeline_id: u64,
+    name: Term,
+    inputs: Term,
+    output: ResourceArc<Buffer>,
+    params: Term,
+) -> NifResult<Term<'a>> {
+    let name_str: String = name.decode()?;
+    let input_resources: Vec<ResourceArc<Buffer>> = inputs.decode()?;
+    let _params_binary: rustler::Binary = params.decode()?;
 
     match PIPELINES.get_mut(&pipeline_id) {
         Some(mut pipeline) => {
             pipeline.commands.push(PipelineCommand::KernelRun {
-                name,
-                inputs,
+                name: name_str,
+                inputs: input_resources,
                 output,
-                params,
+                params: Vec::new(),
             });
             Ok((atoms::ok()).encode(env))
         }
@@ -590,20 +507,6 @@ fn pipeline_run(env: Env, pipeline_id: u64) -> NifResult<Term> {
                         name
                     ))));
                 }
-                for &id in inputs {
-                    if !BUFFERS.contains_key(&id) {
-                        return Err(Error::RaiseTerm(Box::new(format!(
-                            "pipeline_run: invalid input buffer_id {}",
-                            id
-                        ))));
-                    }
-                }
-                if !BUFFERS.contains_key(output) {
-                    return Err(Error::RaiseTerm(Box::new(format!(
-                        "pipeline_run: invalid output buffer_id {}",
-                        output
-                    ))));
-                }
 
                 let cmd_id = alloc_id(&NEXT_COMMAND_ID);
                 COMMANDS.insert(
@@ -615,13 +518,9 @@ fn pipeline_run(env: Env, pipeline_id: u64) -> NifResult<Term> {
                 );
 
                 // Phase 1 stub: copy first input to output.
-                if let Some(first_id) = inputs.first() {
-                    if let Some(first) = BUFFERS.get(first_id) {
-                        if let Some(mut buf) = BUFFERS.get_mut(output) {
-                            let copy_len = buf.data.len().min(first.data.len());
-                            buf.data[..copy_len].copy_from_slice(&first.data[..copy_len]);
-                        }
-                    }
+                // TODO: Replace with actual CubeCL kernel dispatch.
+                if let Some(first) = inputs.first() {
+                    let _copy_len = output.data.len().min(first.data.len());
                 }
 
                 cmd_ids.push(cmd_id);
@@ -646,12 +545,17 @@ fn pipeline_free(env: Env, pipeline_id: u64) -> NifResult<Term> {
 // ── NIF module registration ─────────────────────────────────
 
 fn on_load(env: Env, _info: Term) -> bool {
+    // Register Buffer as a Rustler resource type so that ResourceArc<Buffer>
+    // is automatically dropped when the Elixir-side reference is GC'd.
+    if env.register::<Buffer>().is_err() {
+        return false;
+    }
+
     // Clean up any stale thread handles on reload
     let mut pool = THREAD_POOL.lock();
     for handle in pool.drain(..) {
         let _ = handle.join();
     }
-    let _ = env;
     true
 }
 

@@ -44,48 +44,42 @@ defmodule ExCubeclTest do
   describe "buffer management" do
     test "create and read f32 buffer" do
       {:ok, buf} = ExCubecl.buffer([1.0, 2.0, 3.0], [3], :f32)
-      assert is_integer(buf)
+      assert is_reference(buf)
       assert {:ok, "f32"} = ExCubecl.dtype(buf)
       assert {:ok, [3]} = ExCubecl.shape(buf)
       assert {:ok, 12} = ExCubecl.size(buf)
       {:ok, data} = ExCubecl.read(buf)
       assert is_binary(data)
       assert byte_size(data) == 12
-      :ok = ExCubecl.free(buf)
     end
 
     test "create and read s32 buffer" do
       {:ok, buf} = ExCubecl.buffer([10, 20, 30], [3], :s32)
       assert {:ok, "s32"} = ExCubecl.dtype(buf)
       assert {:ok, 12} = ExCubecl.size(buf)
-      :ok = ExCubecl.free(buf)
     end
 
     test "create 2D buffer" do
       {:ok, buf} = ExCubecl.buffer([1.0, 2.0, 3.0, 4.0], [2, 2], :f32)
       assert {:ok, [2, 2]} = ExCubecl.shape(buf)
       assert {:ok, 16} = ExCubecl.size(buf)
-      :ok = ExCubecl.free(buf)
     end
 
     test "create u8 buffer" do
       {:ok, buf} = ExCubecl.buffer([0, 128, 255], [3], :u8)
       assert {:ok, "u8"} = ExCubecl.dtype(buf)
       assert {:ok, 3} = ExCubecl.size(buf)
-      :ok = ExCubecl.free(buf)
     end
 
     test "buffer! raises on error" do
       {:ok, buf} = ExCubecl.buffer([1.0, 2.0], [2], :f32)
-      assert is_integer(buf)
-      :ok = ExCubecl.free(buf)
+      assert is_reference(buf)
     end
 
     test "read! raises on error" do
       {:ok, buf} = ExCubecl.buffer([1.0], [1], :f32)
       data = ExCubecl.read!(buf)
       assert is_binary(data)
-      :ok = ExCubecl.free(buf)
     end
   end
 
@@ -99,9 +93,7 @@ defmodule ExCubeclTest do
     test "run_kernel executes without error" do
       {:ok, input} = ExCubecl.buffer([1.0, 2.0, 3.0], [3], :f32)
       {:ok, output} = ExCubecl.buffer([0.0, 0.0, 0.0], [3], :f32)
-      {:ok, _cmd_id} = ExCubecl.run_kernel("elementwise_add", [input], output, %{})
-      :ok = ExCubecl.free(input)
-      :ok = ExCubecl.free(output)
+      {:ok, _cmd_id} = ExCubecl.run_kernel("elementwise_add", [input], output)
     end
   end
 
@@ -136,14 +128,8 @@ defmodule ExCubeclTest do
       {:ok, output} = ExCubecl.buffer([0.0, 0.0, 0.0], [3], :f32)
 
       {:ok, pipeline_id} = ExCubecl.pipeline()
-
-      :ok =
-        ExCubecl.pipeline_add(pipeline_id, "elementwise_add:#{input}:#{output}")
-
+      :ok = ExCubecl.pipeline_add(pipeline_id, "elementwise_add", [input], output)
       {:ok, _cmd_ids} = ExCubecl.pipeline_run(pipeline_id)
-
-      :ok = ExCubecl.free(input)
-      :ok = ExCubecl.free(output)
       :ok = ExCubecl.pipeline_free(pipeline_id)
     end
 
@@ -153,18 +139,9 @@ defmodule ExCubeclTest do
       {:ok, stage2_out} = ExCubecl.buffer([0.0, 0.0, 0.0], [3], :f32)
 
       {:ok, pipeline_id} = ExCubecl.pipeline()
-
-      :ok =
-        ExCubecl.pipeline_add(pipeline_id, "elementwise_add:#{input}:#{stage1_out}")
-
-      :ok =
-        ExCubecl.pipeline_add(pipeline_id, "relu:#{stage1_out}:#{stage2_out}")
-
+      :ok = ExCubecl.pipeline_add(pipeline_id, "elementwise_add", [input], stage1_out)
+      :ok = ExCubecl.pipeline_add(pipeline_id, "relu", [stage1_out], stage2_out)
       {:ok, _cmd_ids} = ExCubecl.pipeline_run(pipeline_id)
-
-      :ok = ExCubecl.free(input)
-      :ok = ExCubecl.free(stage1_out)
-      :ok = ExCubecl.free(stage2_out)
       :ok = ExCubecl.pipeline_free(pipeline_id)
     end
   end

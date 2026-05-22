@@ -1,14 +1,14 @@
 defmodule ExCubecl.MixProject do
   use Mix.Project
 
-  @version "0.2.2"
+  @version "0.3.0"
   @source_url "https://github.com/ohhi-vn/ex_cubecl"
 
   def project do
     [
       app: :ex_cubecl,
       version: @version,
-      elixir: "~> 1.19",
+      elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       rustler_crates: rustler_crates(),
@@ -24,7 +24,8 @@ defmodule ExCubecl.MixProject do
 
   def application do
     [
-      extra_applications: [:logger]
+      extra_applications: [:logger],
+      mod: {ExCubecl.Application, []}
     ]
   end
 
@@ -61,6 +62,7 @@ defmodule ExCubecl.MixProject do
       name: "ex_cubecl",
       files: ~w(
         lib
+        lib/ex_cubecl
         priv
         native/ex_cubecl_nif/Cargo.toml
         native/ex_cubecl_nif/Cargo.lock
@@ -72,13 +74,13 @@ defmodule ExCubecl.MixProject do
         mix.exs
         mix.lock
         README.md
+        CHANGELOG.md
         LICENSE
       ),
       licenses: ["Apache-2.0"],
       links: %{
         "GitHub" => @source_url,
-        "Changelog" => "#{@source_url}/blob/main/CHANGELOG.md",
-        "Sponsor" => @source_url
+        "Changelog" => "#{@source_url}/blob/main/CHANGELOG.md"
       },
       maintainers: ["Manh Vu"]
     ]
@@ -104,6 +106,7 @@ defmodule ExCubecl.MixProject do
       ],
       groups_for_modules: [
         "GPU Runtime": [ExCubecl],
+        "Pipeline Commands": [ExCubecl.Command],
         "NIF Stubs": [ExCubecl.NIF]
       ],
       skip_undefined_reference_warnings_on: ["guides/05_mobile.md"],

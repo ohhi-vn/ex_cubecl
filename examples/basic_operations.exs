@@ -46,10 +46,6 @@ IO.puts("")
 IO.puts("Available kernels: #{inspect(kernels)}")
 IO.puts("")
 
-# Cleanup
-ExCubecl.free(a)
-ExCubecl.free(b)
-ExCubecl.free(matrix)
-ExCubecl.free(int_buf)
+# Buffers are automatically freed when GC'd — no manual free needed
 
 IO.puts("=== Done ===")

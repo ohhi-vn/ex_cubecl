@@ -48,12 +48,12 @@ IO.puts("--- Pipeline Orchestration ---")
 {:ok, input_buf} = ExCubecl.buffer([1.0, 2.0, 3.0, 4.0, 5.0], [5], :f32)
 {:ok, stage1_out} = ExCubecl.buffer(List.duplicate(0.0, 5), [5], :f32)
 
-ExCubecl.pipeline_add(pipeline, "elementwise_add:#{input_buf}:#{stage1_out}")
+ExCubecl.pipeline_add(pipeline, "elementwise_add", [input_buf], stage1_out)
 
 # Stage 2: Activation
 {:ok, stage2_out} = ExCubecl.buffer(List.duplicate(0.0, 5), [5], :f32)
 
-ExCubecl.pipeline_add(pipeline, "relu:#{stage1_out}:#{stage2_out}")
+ExCubecl.pipeline_add(pipeline, "relu", [stage1_out], stage2_out)
 
 IO.puts("Pipeline created with 2 stages")
 
@@ -65,13 +65,8 @@ IO.puts("Pipeline executed")
 {:ok, final} = ExCubecl.read(stage2_out)
 IO.puts("Pipeline output: #{byte_size(final)} bytes")
 
-# Cleanup
-ExCubecl.free(input)
-ExCubecl.free(output)
-ExCubecl.free(input_buf)
-ExCubecl.free(stage1_out)
-ExCubecl.free(stage2_out)
-ExCubecl.pipeline_free(pipeline)
+# Buffers are automatically freed when GC'd — no manual free needed
+:ok = ExCubecl.pipeline_free(pipeline)
 
 IO.puts("")
 IO.puts("=== Done ===")

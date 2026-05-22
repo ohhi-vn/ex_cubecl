@@ -35,8 +35,8 @@ defmodule ExCubecl do
       # Read back
       {:ok, binary} = ExCubecl.read(buf)
 
-      # Free when done
-      ExCubecl.free(buf)
+      # Buffers are automatically freed when the Elixir term is garbage collected.
+      # No manual free is needed.
 
   ## Kernel execution
 
@@ -52,16 +52,19 @@ defmodule ExCubecl do
   ## Pipelines
 
       {:ok, p} = ExCubecl.pipeline()
-      :ok = ExCubecl.pipeline_add(p, "elementwise_add:1,2:3")
+      :ok = ExCubecl.pipeline_add(p, "elementwise_add", [buf_a, buf_b], buf_out)
       :ok = ExCubecl.pipeline_run(p)
       :ok = ExCubecl.pipeline_free(p)
   """
 
   alias ExCubecl.NIF
+  alias ExCubecl.Command
 
   @version "0.2.0"
 
   @dtypes ~w(f32 f64 s32 s64 u32 u8)
+
+  @type buffer_ref :: reference()
 
   # ── Device ──────────────────────────────────────────────────
 
@@ -86,9 +89,14 @@ defmodule ExCubecl do
 
   ## Returns
 
-    `{:ok, buffer_id}` on success, `{:error, reason}` on failure.
+    `{:ok, buffer}` on success where `buffer` is a Rustler resource reference.
+    The buffer is automatically freed when the Elixir term is garbage collected.
+
+  ## Examples
+
+      {:ok, buf} = ExCubecl.buffer([1.0, 2.0, 3.0], [3], :f32)
   """
-  @spec buffer(list(), [non_neg_integer()], atom()) :: {:ok, non_neg_integer()} | {:error, term()}
+  @spec buffer(list(), [non_neg_integer()], atom()) :: {:ok, reference()} | {:error, term()}
   def buffer(data, shape, type \\ :f32) when is_list(data) and is_list(shape) do
     dtype_str = dtype_to_string(type)
     binary = list_to_binary(data, dtype_str)
@@ -100,14 +108,14 @@ defmodule ExCubecl do
 
   See `buffer/3` for parameters.
   """
-  @spec buffer!(list(), [non_neg_integer()], atom()) :: non_neg_integer()
+  @spec buffer!(list(), [non_neg_integer()], atom()) :: reference()
   def buffer!(data, shape, type \\ :f32) do
     case apply(NIF, :buffer_new, [
            list_to_binary(data, dtype_to_string(type)),
            shape,
            dtype_to_string(type)
          ]) do
-      {:ok, id} -> id
+      {:ok, buf} -> buf
       {:error, reason} -> raise "ExCubecl.buffer!/3 failed: #{inspect(reason)}"
     end
   end
@@ -115,35 +123,31 @@ defmodule ExCubecl do
   @doc """
   Reads buffer data back from the GPU as a binary.
   """
-  @spec read(non_neg_integer()) :: {:ok, binary()} | {:error, term()}
-  def read(id) when is_integer(id), do: NIF.buffer_read(id)
+  @spec read(reference()) :: {:ok, binary()} | {:error, term()}
+  def read(buf) when is_reference(buf), do: NIF.buffer_read(buf)
 
   @doc """
   Reads buffer data back, raising on error.
   """
-  @spec read!(non_neg_integer()) :: binary()
-  def read!(id) when is_integer(id) do
-    case apply(NIF, :buffer_read, [id]) do
+  @spec read!(reference()) :: binary()
+  def read!(buf) when is_reference(buf) do
+    case apply(NIF, :buffer_read, [buf]) do
       {:ok, data} -> data
       {:error, reason} -> raise "ExCubecl.read!/1 failed: #{inspect(reason)}"
     end
   end
 
   @doc "Returns the byte size of a buffer."
-  @spec size(non_neg_integer()) :: {:ok, non_neg_integer()} | {:error, term()}
-  def size(id) when is_integer(id), do: NIF.buffer_size(id)
+  @spec size(reference()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def size(buf) when is_reference(buf), do: NIF.buffer_size(buf)
 
   @doc "Returns the shape of a buffer."
-  @spec shape(non_neg_integer()) :: {:ok, [non_neg_integer()]} | {:error, term()}
-  def shape(id) when is_integer(id), do: NIF.buffer_shape(id)
+  @spec shape(reference()) :: {:ok, [non_neg_integer()]} | {:error, term()}
+  def shape(buf) when is_reference(buf), do: NIF.buffer_shape(buf)
 
   @doc "Returns the dtype string of a buffer (e.g. `\"f32\"`)."
-  @spec dtype(non_neg_integer()) :: {:ok, String.t()} | {:error, term()}
-  def dtype(id) when is_integer(id), do: NIF.buffer_dtype(id)
-
-  @doc "Frees a GPU buffer."
-  @spec free(non_neg_integer()) :: :ok | {:error, term()}
-  def free(id) when is_integer(id), do: NIF.buffer_free(id)
+  @spec dtype(reference()) :: {:ok, String.t()} | {:error, term()}
+  def dtype(buf) when is_reference(buf), do: NIF.buffer_dtype(buf)
 
   # ── Kernels ─────────────────────────────────────────────────
 
@@ -153,11 +157,11 @@ defmodule ExCubecl do
   ## Parameters
 
     * `name` — kernel name string (see `kernels/0`)
-    * `inputs` — list of input buffer IDs
-    * `output` — output buffer ID
+    * `inputs` — list of input buffer references
+    * `output` — output buffer reference
     * `params` — optional map of kernel parameters (default `%{}`)
   """
-  @spec run_kernel(String.t(), [non_neg_integer()], non_neg_integer(), map()) ::
+  @spec run_kernel(String.t(), [reference()], reference(), map()) ::
           {:ok, non_neg_integer()} | {:error, term()}
   def run_kernel(name, inputs, output, params \\ %{}) when is_binary(name) do
     params_binary = :erlang.term_to_binary(params)
@@ -198,14 +202,40 @@ defmodule ExCubecl do
   def pipeline, do: NIF.pipeline_new()
 
   @doc """
-  Adds a command to a pipeline.
+  Adds a kernel command to a pipeline.
 
-  Command format: `\"kernel_name:input_id,input_id,...:output_id\"`
-  Example: `\"elementwise_add:1,2:3\"`
+  ## Parameters
+
+    * `pipeline_id` — pipeline reference returned by `pipeline/0`
+    * `kernel` — kernel name string (e.g. `"elementwise_add"`)
+    * `inputs` — list of input buffer references
+    * `output` — output buffer reference
+    * `params` — optional map of kernel parameters (default `%{}`)
+
+  ## Examples
+
+      {:ok, pipeline} = ExCubecl.pipeline()
+      ExCubecl.pipeline_add(pipeline, "elementwise_add", [buf_a, buf_b], buf_out)
   """
-  @spec pipeline_add(non_neg_integer(), String.t()) :: :ok | {:error, term()}
-  def pipeline_add(pipeline_id, command) when is_integer(pipeline_id) and is_binary(command) do
-    NIF.pipeline_add(pipeline_id, command)
+  @spec pipeline_add(non_neg_integer(), String.t(), [reference()], reference(), map()) ::
+          :ok | {:error, term()}
+  def pipeline_add(pipeline_id, kernel, inputs, output, params \\ %{})
+      when is_integer(pipeline_id) and is_binary(kernel) do
+    params_binary = :erlang.term_to_binary(params)
+    NIF.pipeline_add(pipeline_id, kernel, inputs, output, params_binary)
+  end
+
+  @doc """
+  Adds a command to a pipeline using a `Command` struct.
+
+  ## Examples
+
+      cmd = ExCubecl.Command.run_kernel("elementwise_add", [buf_a, buf_b], buf_out)
+      ExCubecl.pipeline_add_struct(pipeline, cmd)
+  """
+  @spec pipeline_add_struct(non_neg_integer(), Command.t()) :: :ok | {:error, term()}
+  def pipeline_add_struct(pipeline_id, %Command{} = command) when is_integer(pipeline_id) do
+    pipeline_add(pipeline_id, command.kernel, command.inputs, command.output, command.params)
   end
 
   @doc "Runs all commands in a pipeline sequentially."

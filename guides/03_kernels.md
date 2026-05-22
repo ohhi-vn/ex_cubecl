@@ -9,8 +9,8 @@ Kernels are GPU programs that operate on buffers.
 ```
 
 - `name` — string kernel name (see below)
-- `inputs` — list of input buffer IDs
-- `output` — output buffer ID
+- `inputs` — list of input buffer references
+- `output` — output buffer reference
 - `params` — optional map of kernel-specific parameters
 
 ## Available Kernels
@@ -30,8 +30,8 @@ Kernels are GPU programs that operate on buffers.
 {:ok, b} = ExCubecl.buffer([4.0, 5.0, 6.0], [3], :f32)
 {:ok, output} = ExCubecl.buffer([0.0, 0.0, 0.0], [3], :f32)
 
-{:ok, _cmd} = ExCubecl.run_kernel("elementwise_add", [a, b], output, %{})
-{:ok, _cmd} = ExCubecl.run_kernel("elementwise_mul", [a, b], output, %{})
+{:ok, _cmd} = ExCubecl.run_kernel("elementwise_add", [a, b], output)
+{:ok, _cmd} = ExCubecl.run_kernel("elementwise_mul", [a, b], output)
 ```
 
 ## Activation Functions
@@ -40,9 +40,9 @@ Kernels are GPU programs that operate on buffers.
 {:ok, input} = ExCubecl.buffer([-1.0, 0.0, 1.0], [3], :f32)
 {:ok, output} = ExCubecl.buffer([0.0, 0.0, 0.0], [3], :f32)
 
-{:ok, _cmd} = ExCubecl.run_kernel("relu", [input], output, %{})
-{:ok, _cmd} = ExCubecl.run_kernel("sigmoid", [input], output, %{})
-{:ok, _cmd} = ExCubecl.run_kernel("tanh", [input], output, %{})
+{:ok, _cmd} = ExCubecl.run_kernel("relu", [input], output)
+{:ok, _cmd} = ExCubecl.run_kernel("sigmoid", [input], output)
+{:ok, _cmd} = ExCubecl.run_kernel("tanh", [input], output)
 ```
 
 ## Reductions
@@ -51,9 +51,9 @@ Kernels are GPU programs that operate on buffers.
 {:ok, input} = ExCubecl.buffer([1.0, 5.0, 3.0, 2.0], [4], :f32)
 {:ok, output} = ExCubecl.buffer([0.0], [1], :f32)
 
-{:ok, _cmd} = ExCubecl.run_kernel("reduce_sum", [input], output, %{})
-{:ok, _cmd} = ExCubecl.run_kernel("reduce_max", [input], output, %{})
-{:ok, _cmd} = ExCubecl.run_kernel("reduce_min", [input], output, %{})
+{:ok, _cmd} = ExCubecl.run_kernel("reduce_sum", [input], output)
+{:ok, _cmd} = ExCubecl.run_kernel("reduce_max", [input], output)
+{:ok, _cmd} = ExCubecl.run_kernel("reduce_min", [input], output)
 ```
 
 ## Matrix Multiplication
@@ -66,7 +66,7 @@ Kernels are GPU programs that operate on buffers.
 # Output: 2x2 matrix
 {:ok, output} = ExCubecl.buffer(List.duplicate(0.0, 4), [2, 2], :f32)
 
-{:ok, _cmd} = ExCubecl.run_kernel("matmul", [a, b], output, %{})
+{:ok, _cmd} = ExCubecl.run_kernel("matmul", [a, b], output)
 ```
 
 ## Convolution
@@ -79,7 +79,7 @@ Kernels are GPU programs that operate on buffers.
 {:ok, kernel} = ExCubecl.buffer([1.0, 0.0, 0.0, -1.0], [1, 1, 2, 2], :f32)
 {:ok, output} = ExCubecl.buffer(List.duplicate(0.0, 4), [1, 1, 2, 2], :f32)
 
-{:ok, _cmd} = ExCubecl.run_kernel("conv2d", [input, kernel], output, %{})
+{:ok, _cmd} = ExCubecl.run_kernel("conv2d", [input, kernel], output)
 ```
 
 ## Shape Operations
@@ -89,11 +89,11 @@ Kernels are GPU programs that operate on buffers.
 
 # Reshape to 2x2
 {:ok, output} = ExCubecl.buffer(List.duplicate(0.0, 4), [2, 2], :f32)
-{:ok, _cmd} = ExCubecl.run_kernel("reshape", [input], output, %{})
+{:ok, _cmd} = ExCubecl.run_kernel("reshape", [input], output)
 
 # Transpose
 {:ok, transposed} = ExCubecl.buffer(List.duplicate(0.0, 4), [2, 2], :f32)
-{:ok, _cmd} = ExCubecl.run_kernel("transpose", [output], transposed, %{})
+{:ok, _cmd} = ExCubecl.run_kernel("transpose", [output], transposed)
 ```
 
 ## Custom Kernels (Phase 2+)

@@ -12,8 +12,7 @@
 # Read back
 {:ok, data} = ExCubecl.read(buf)
 
-# Cleanup
-:ok = ExCubecl.free(buf)
+# No manual cleanup needed — buffer is automatically freed when GC'd
 ```
 
 ## Image Processing Pipeline
@@ -29,17 +28,13 @@ pixels = Enum.to_list(10..250//10) |> Enum.take(25)
 {:ok, output} = ExCubecl.buffer(List.duplicate(0.0, 25), [5, 5], :f32)
 
 # Run kernels
-{:ok, _cmd1} = ExCubecl.run_kernel("blur", [padded], blurred, %{radius: 2})
-{:ok, _cmd2} = ExCubecl.run_kernel("edge_detect", [blurred], output, %{})
+{:ok, _cmd1} = ExCubecl.run_kernel("blur", [padded], blurred)
+{:ok, _cmd2} = ExCubecl.run_kernel("edge_detect", [blurred], output)
 
 # Read result
 {:ok, result} = ExCubecl.read(output)
 
-# Cleanup
-:ok = ExCubecl.free(input)
-:ok = ExCubecl.free(padded)
-:ok = ExCubecl.free(blurred)
-:ok = ExCubecl.free(output)
+# No manual cleanup needed — buffers are automatically freed when GC'd
 ```
 
 ## AI Inference Pipeline
@@ -48,24 +43,20 @@ pixels = Enum.to_list(10..250//10) |> Enum.take(25)
 # Preprocess: normalize input pixels
 {:ok, input} = ExCubecl.buffer(raw_pixels, [224, 224, 3], :f32)
 {:ok, preprocessed} = ExCubecl.buffer(List.duplicate(0.0, 224 * 224 * 3), [224, 224, 3], :f32)
-{:ok, _cmd1} = ExCubecl.run_kernel("reshape", [input], preprocessed, %{})
+{:ok, _cmd1} = ExCubecl.run_kernel("reshape", [input], preprocessed)
 
 # Inference: fully-connected layer via matmul
 {:ok, logits} = ExCubecl.buffer(List.duplicate(0.0, 1000), [1000], :f32)
-{:ok, _cmd2} = ExCubecl.run_kernel("matmul", [preprocessed], logits, %{})
+{:ok, _cmd2} = ExCubecl.run_kernel("matmul", [preprocessed], logits)
 
 # Post-process: softmax for probabilities
 {:ok, probs} = ExCubecl.buffer(List.duplicate(0.0, 1000), [1000], :f32)
-{:ok, _cmd3} = ExCubecl.run_kernel("softmax", [logits], probs, %{})
+{:ok, _cmd3} = ExCubecl.run_kernel("softmax", [logits], probs)
 
 # Read predictions
 {:ok, predictions} = ExCubecl.read(probs)
 
-# Cleanup
-:ok = ExCubecl.free(input)
-:ok = ExCubecl.free(preprocessed)
-:ok = ExCubecl.free(logits)
-:ok = ExCubecl.free(probs)
+# No manual cleanup needed — buffers are automatically freed when GC'd
 ```
 
 ## Matrix Operations
@@ -76,17 +67,13 @@ pixels = Enum.to_list(10..250//10) |> Enum.take(25)
 {:ok, b} = ExCubecl.buffer([7.0, 8.0, 9.0, 10.0, 11.0, 12.0], [3, 2], :f32)
 {:ok, output} = ExCubecl.buffer(List.duplicate(0.0, 4), [2, 2], :f32)
 
-{:ok, _cmd} = ExCubecl.run_kernel("matmul", [a, b], output, %{})
+{:ok, _cmd} = ExCubecl.run_kernel("matmul", [a, b], output)
 {:ok, result} = ExCubecl.read(output)
 
 # Identity matrix
 {:ok, eye} = ExCubecl.buffer([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], [3, 3], :f32)
 
-# Cleanup
-:ok = ExCubecl.free(a)
-:ok = ExCubecl.free(b)
-:ok = ExCubecl.free(output)
-:ok = ExCubecl.free(eye)
+# No manual cleanup needed — buffers are automatically freed when GC'd
 ```
 
 ## Async Batch Processing
@@ -102,10 +89,9 @@ cmd_ids =
   end
 
 # Wait for all to complete
-for {cmd_id, input, output} <- cmd_ids do
+for {cmd_id, _input, _output} <- cmd_ids do
   :ok = ExCubecl.wait(cmd_id)
-  :ok = ExCubecl.free(input)
-  :ok = ExCubecl.free(output)
+  # Buffers are automatically freed when GC'd
 end
 ```
 
@@ -120,29 +106,13 @@ end
 
 {:ok, pipeline} = ExCubecl.pipeline()
 
-:ok =
-  ExCubecl.pipeline_add(pipeline,
-    "elementwise_add:#{input},#{input}:#{denoised}"
-  )
-
-:ok =
-  ExCubecl.pipeline_add(pipeline,
-    "relu:#{denoised}:#{edges}"
-  )
-
-:ok =
-  ExCubecl.pipeline_add(pipeline,
-    "reduce_sum:#{edges}:#{output}"
-  )
+:ok = ExCubecl.pipeline_add(pipeline, "elementwise_add", [input, input], denoised)
+:ok = ExCubecl.pipeline_add(pipeline, "relu", [denoised], edges)
+:ok = ExCubecl.pipeline_add(pipeline, "reduce_sum", [edges], output)
 
 {:ok, _cmd_ids} = ExCubecl.pipeline_run(pipeline)
 
 {:ok, result} = ExCubecl.read(output)
 
-# Cleanup everything
-:ok = ExCubecl.free(input)
-:ok = ExCubecl.free(denoised)
-:ok = ExCubecl.free(edges)
-:ok = ExCubecl.free(output)
 :ok = ExCubecl.pipeline_free(pipeline)
 ```

@@ -43,20 +43,23 @@ data = ExCubecl.read!(buf)
 {:ok, 16} = ExCubecl.size(buf)         # total bytes
 ```
 
-## Cleanup
+## Automatic Memory Management
 
-```elixir
-:ok = ExCubecl.free(buf)
-```
-
-Always free buffers when done to avoid GPU memory leaks. The `!/` variants raise on error:
+Buffers are managed via Rustler's `ResourceArc` mechanism. When the Elixir
+term holding a buffer reference is garbage collected, Rust's `Drop` is
+automatically called to free the underlying GPU memory. **No manual `ExCubecl.free/1`
+call is needed or available** — the old `free/1` function has been removed in
+favor of automatic cleanup.
 
 ```elixir
 buf = ExCubecl.buffer!([1.0, 2.0], [2], :f32)
 data = ExCubecl.read!(buf)
-:ok = ExCubecl.free(buf)
+# Buffer is automatically freed when `buf` is garbage collected
 ```
 
 ## Internal Representation
 
-Internally, buffers are reference-counted GPU resources managed by the Rust NIF layer. The Elixir side only holds a lightweight integer handle. All data lives in Rust memory, not in the BEAM heap.
+Internally, buffers are Rustler resource references (`ResourceArc<Buffer>`)
+managed by the Rust NIF layer. The Elixir side holds an opaque reference term.
+All data lives in Rust memory, not in the BEAM heap. Memory is automatically
+released when the reference is garbage collected by the BEAM.

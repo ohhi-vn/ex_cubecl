@@ -1,5 +1,7 @@
 # ExCubecl
 
+[![Hex.pm](https://img.shields.io/hexpm/v/ex_cubecl.svg)](https://hex.pm/packages/ex_cubecl)
+
 **ExCubecl** is a GPU compute runtime for Elixir, powered by [CubeCL](https://github.com/tracel-ai/cubecl) via Rust NIFs.
 
 It provides GPU buffer management, kernel execution, async command submission, and pipeline orchestration — designed for AI inference, media processing, and realtime GPU effects on mobile and desktop.
@@ -51,42 +53,39 @@ end
 
 ```elixir
 # Check device
-ExCubecl.device_info()
-%{name: "ExCubecl CPU (Rust NIF)", gpu: false, version: "0.2.0"}
+{:ok, info} = ExCubecl.device_info()
+# %{device_name: "CubeCL GPU (Phase 1 — CPU simulation)", ...}
+# Note: Currently runs on CPU; GPU dispatch coming in a future release
 
-# Create GPU buffers
-a = ExCubecl.buffer([1.0, 2.0, 3.0], {3}, :f32)
-b = ExCubecl.buffer([4.0, 5.0, 6.0], {3}, :f32)
+# Create GPU buffers (returns resource references, not integer IDs)
+a = ExCubecl.buffer!([1.0, 2.0, 3.0], [3], :f32)
+b = ExCubecl.buffer!([4.0, 5.0, 6.0], [3], :f32)
 
 # Inspect
-ExCubecl.shape(a)   # {3}
-ExCubecl.dtype(a)   # :f32
-ExCubecl.size(a)    # 12 (bytes)
+{:ok, [3]} = ExCubecl.shape(a)
+{:ok, "f32"} = ExCubecl.dtype(a)
+{:ok, 12} = ExCubecl.size(a)    # bytes
 
 # Read data back
-data = ExCubecl.read(a)
+{:ok, data} = ExCubecl.read(a)
 
 # Run a kernel
-output = ExCubecl.buffer([0.0, 0.0, 0.0], {3}, :f32)
-ExCubecl.run_kernel(:elementwise_add, [a], output, %{})
+output = ExCubecl.buffer!([0.0, 0.0, 0.0], [3], :f32)
+{:ok, _cmd} = ExCubecl.run_kernel("elementwise_add", [a, b], output)
 
 # Async execution
-cmd_id = ExCubecl.submit(%{op: :run_kernel, kernel: :relu, inputs: [a], output: output, params: %{}})
-ExCubecl.poll(cmd_id)   # :pending | :completed | {:error, reason}
-ExCubecl.wait(cmd_id)   # blocks until done
+{:ok, cmd_id} = ExCubecl.submit("some_command")
+{:ok, :completed} = ExCubecl.poll(cmd_id)
+:ok = ExCubecl.wait(cmd_id)
 
 # Pipeline orchestration
-pipeline = ExCubecl.pipeline()
-pipeline
-|> ExCubecl.pipeline_add(%{op: :run_kernel, kernel: :blur, inputs: [a], output: b, params: %{}})
-|> ExCubecl.pipeline_add(%{op: :run_kernel, kernel: :relu, inputs: [b], output: output, params: %{}})
-ExCubecl.pipeline_run(pipeline)
+{:ok, pipeline} = ExCubecl.pipeline()
+:ok = ExCubecl.pipeline_add(pipeline, "elementwise_add", [a, b], output)
+:ok = ExCubecl.pipeline_add(pipeline, "relu", [output], output)
+{:ok, _cmd_ids} = ExCubecl.pipeline_run(pipeline)
+:ok = ExCubecl.pipeline_free(pipeline)
 
-# Cleanup
-ExCubecl.free(a)
-ExCubecl.free(b)
-ExCubecl.free(output)
-ExCubecl.free_pipeline(pipeline)
+# Buffers are automatically freed when GC'd — no manual free needed
 ```
 
 ## Supported Types
@@ -181,7 +180,7 @@ Virtual background, AR effects, realtime filters — all GPU-native.
 | 1     | GPU compute runtime            | ✅ Current    |
 | 2     | Media runtime (video/camera)   | 🔜 Planned    |
 | 3     | AI runtime (inference)         | 🔜 Planned    |
-| 4     | Nx integration (Axon/training) | 🔜 Planned    |
+| 4     | Nx integration (Axon/training) | 🔜 Planned (Phase 4) |
 
 ## License
 

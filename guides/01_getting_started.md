@@ -40,8 +40,7 @@ Buffers are the primary data structure, representing GPU memory holding typed, s
 # Read data back
 {:ok, data} = ExCubecl.read(buf)
 
-# Free when done
-:ok = ExCubecl.free(buf)
+# Buffers are automatically freed when the Elixir term is garbage collected.
 ```
 
 ### Kernels
@@ -52,7 +51,7 @@ Kernels are GPU programs that operate on buffers:
 {:ok, input} = ExCubecl.buffer([1.0, 2.0, 3.0], [3], :f32)
 {:ok, output} = ExCubecl.buffer([0.0, 0.0, 0.0], [3], :f32)
 
-{:ok, _cmd} = ExCubecl.run_kernel("elementwise_add", [input], output, %{})
+{:ok, _cmd} = ExCubecl.run_kernel("elementwise_add", [input], output)
 ```
 
 ### Async Execution
@@ -76,8 +75,8 @@ Compose multiple GPU operations into a single executable graph:
 ```elixir
 {:ok, pipeline} = ExCubecl.pipeline()
 
-:ok = ExCubecl.pipeline_add(pipeline, "elementwise_add:1,2:3")
-:ok = ExCubecl.pipeline_add(pipeline, "relu:3,4")
+:ok = ExCubecl.pipeline_add(pipeline, "elementwise_add", [buf_a, buf_b], buf_out)
+:ok = ExCubecl.pipeline_add(pipeline, "relu", [buf_out], buf_result)
 
 {:ok, _cmd_ids} = ExCubecl.pipeline_run(pipeline)
 :ok = ExCubecl.pipeline_free(pipeline)
@@ -105,7 +104,7 @@ ExCubecl.device_count()  # 1
 
 ## Next Steps
 
-- [Buffer Management](02_buffers.md) — creating, reading, inspecting, freeing buffers
+- [Buffer Management](02_buffers.md) — creating, reading, and inspecting buffers
 - [Kernel Execution](03_kernels.md) — running GPU kernels
 - [Async & Pipelines](04_async_pipelines.md) — non-blocking execution and pipeline orchestration
 - [Mobile Integration](05_mobile.md) — iOS/Android C FFI

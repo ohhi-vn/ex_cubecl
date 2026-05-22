@@ -74,8 +74,8 @@ Pipelines compose multiple GPU operations into a single executable graph.
 ```elixir
 {:ok, pipeline} = ExCubecl.pipeline()
 
-:ok = ExCubecl.pipeline_add(pipeline, "elementwise_add:1,2:3")
-:ok = ExCubecl.pipeline_add(pipeline, "relu:3:4")
+:ok = ExCubecl.pipeline_add(pipeline, "elementwise_add", [buf_a, buf_b], buf_out)
+:ok = ExCubecl.pipeline_add(pipeline, "relu", [buf_out], buf_result)
 
 {:ok, _cmd_ids} = ExCubecl.pipeline_run(pipeline)
 :ok = ExCubecl.pipeline_free(pipeline)
@@ -83,13 +83,8 @@ Pipelines compose multiple GPU operations into a single executable graph.
 
 ### Command Format
 
-Pipeline commands use a simple string protocol:
-
-```
-"kernel_name:input_id,input_id,...:output_id"
-```
-
-Example: `"elementwise_add:1,2:3"` means run `elementwise_add` with inputs from buffers 1 and 2, writing output to buffer 3.
+Pipeline commands are passed as structured arguments: kernel name,
+input buffer references, and output buffer reference.
 
 ### Multi-Stage Pipeline
 
@@ -99,16 +94,13 @@ Example: `"elementwise_add:1,2:3"` means run `elementwise_add` with inputs from 
 {:ok, stage2} = ExCubecl.buffer([0.0, 0.0, 0.0], [3], :f32)
 
 {:ok, pipeline} = ExCubecl.pipeline()
-:ok = ExCubecl.pipeline_add(pipeline, "elementwise_add:#{input},#{input}:#{stage1}")
-:ok = ExCubecl.pipeline_add(pipeline, "relu:#{stage1}:#{stage2}")
+:ok = ExCubecl.pipeline_add(pipeline, "elementwise_add", [input, input], stage1)
+:ok = ExCubecl.pipeline_add(pipeline, "relu", [stage1], stage2)
 
 {:ok, _cmd_ids} = ExCubecl.pipeline_run(pipeline)
 
 {:ok, result} = ExCubecl.read(stage2)
 
-:ok = ExCubecl.free(input)
-:ok = ExCubecl.free(stage1)
-:ok = ExCubecl.free(stage2)
 :ok = ExCubecl.pipeline_free(pipeline)
 ```
 
@@ -118,8 +110,8 @@ Run an entire pipeline asynchronously:
 
 ```elixir
 {:ok, pipeline} = ExCubecl.pipeline()
-:ok = ExCubecl.pipeline_add(pipeline, "blur:1:2")
-:ok = ExCubecl.pipeline_add(pipeline, "relu:2:3")
+:ok = ExCubecl.pipeline_add(pipeline, "blur", [buf_in], buf_blur)
+:ok = ExCubecl.pipeline_add(pipeline, "relu", [buf_blur], buf_out)
 
 # Run pipeline async
 {:ok, cmd_id} = ExCubecl.submit("run_pipeline")

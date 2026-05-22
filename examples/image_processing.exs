@@ -24,23 +24,19 @@ IO.puts("Padded buffer: shape=#{inspect(shape_p)}")
 IO.puts("Output buffer: shape=#{inspect(shape_o)}")
 
 # Run a blur kernel
-{:ok, _cmd} = ExCubecl.run_kernel("blur", [padded], output, %{radius: 1})
+{:ok, _cmd} = ExCubecl.run_kernel("blur", [padded], output)
 IO.puts("Blur kernel executed")
 
 # Run edge detection
 {:ok, edges} = ExCubecl.buffer(List.duplicate(0.0, 25), [5, 5], :f32)
-{:ok, _cmd2} = ExCubecl.run_kernel("edge_detect", [padded], edges, %{})
+{:ok, _cmd2} = ExCubecl.run_kernel("edge_detect", [padded], edges)
 IO.puts("Edge detection kernel executed")
 
 # Read back results
 {:ok, result_data} = ExCubecl.read(output)
 IO.puts("Output data length: #{byte_size(result_data)} bytes")
 
-# Cleanup
-ExCubecl.free(image)
-ExCubecl.free(padded)
-ExCubecl.free(output)
-ExCubecl.free(edges)
+# Buffers are automatically freed when GC'd — no manual free needed
 
 IO.puts("")
 IO.puts("=== Done ===")

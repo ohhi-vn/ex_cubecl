@@ -18,6 +18,9 @@ defmodule ExCubecl.NIF do
 
   Each function delegates to the Rust NIF implementation.
   If the NIF is not loaded, returns `{:error, :nif_not_loaded}`.
+
+  Buffers are managed via Rustler `ResourceArc` — they are automatically
+  freed when the Elixir term is garbage collected. No manual free is needed.
   """
 
   use Rustler, otp_app: :ex_cubecl, crate: "ex_cubecl_nif"
@@ -30,11 +33,10 @@ defmodule ExCubecl.NIF do
   # ── Buffer lifecycle ────────────────────────────────────────
 
   def buffer_new(_data, _shape, _dtype), do: nif_error()
-  def buffer_read(_id), do: nif_error()
-  def buffer_size(_id), do: nif_error()
-  def buffer_shape(_id), do: nif_error()
-  def buffer_dtype(_id), do: nif_error()
-  def buffer_free(_id), do: nif_error()
+  def buffer_read(_buffer), do: nif_error()
+  def buffer_size(_buffer), do: nif_error()
+  def buffer_shape(_buffer), do: nif_error()
+  def buffer_dtype(_buffer), do: nif_error()
 
   # ── Kernel execution ────────────────────────────────────────
 
@@ -50,7 +52,7 @@ defmodule ExCubecl.NIF do
   # ── Pipelines ───────────────────────────────────────────────
 
   def pipeline_new(), do: nif_error()
-  def pipeline_add(_pipeline_id, _command), do: nif_error()
+  def pipeline_add(_pipeline_id, _name, _inputs, _output, _params), do: nif_error()
   def pipeline_run(_pipeline_id), do: nif_error()
   def pipeline_free(_pipeline_id), do: nif_error()
 
