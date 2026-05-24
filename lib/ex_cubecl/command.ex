@@ -29,7 +29,7 @@ defmodule ExCubecl.Command do
   defstruct [:op, :kernel, :inputs, :output, params: %{}]
 
   @type t :: %__MODULE__{
-          op: :run_kernel,
+          op: :run_kernel | :filter | :overlay | :encode | :read_frame,
           kernel: String.t(),
           inputs: [reference()],
           output: reference(),

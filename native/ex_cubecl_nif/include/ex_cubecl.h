@@ -6,12 +6,15 @@
  * library. It is designed for use on iOS (via Objective-C/Swift bridging) and
  * Android (via JNI).
  *
- * All functions use opaque handles to reference buffers, pipelines, and commands.
- * A buffer handle of 0 indicates an error. Call ex_cubecl_last_error() to
- * retrieve error details.
+ * All functions use opaque handles to reference buffers, pipelines, commands,
+ * media sources, and encoders. A handle of 0 indicates an error. Call
+ * ex_cubecl_last_error() to retrieve error details.
  *
  * Thread safety: The internal context is thread-local. Handles are only valid
  * on the thread that created them.
+ *
+ * Phase 2 extensions: GPU texture upload from YUV planes, kernel application
+ * to textures, and GPU audio mix.
  */
 
 #ifndef EX_CUBECL_H
@@ -34,6 +37,15 @@ typedef size_t ex_cubecl_buffer_handle_t;
 /** Opaque handle to a command pipeline. 0 = invalid/null. */
 typedef size_t ex_cubecl_pipeline_handle_t;
 
+/** Opaque handle to a GPU texture (video frame). 0 = invalid/null. */
+typedef size_t ex_cubecl_texture_handle_t;
+
+/** Opaque handle to a media source. 0 = invalid/null. */
+typedef size_t ex_cubecl_media_handle_t;
+
+/** Opaque handle to a transcoder/encoder. 0 = invalid/null. */
+typedef size_t ex_cubecl_encoder_handle_t;
+
 /* ---------------------------------------------------------------------------
  * Data types
  * --------------------------------------------------------------------------- */
@@ -47,6 +59,14 @@ typedef enum {
     EX_CUBECL_DTYPE_U32 = 4,
     EX_CUBECL_DTYPE_U8  = 5,
 } ex_cubecl_dtype_t;
+
+/** Pixel format for video textures. */
+typedef enum {
+    EX_CUBECL_FMT_YUV420P = 0,
+    EX_CUBECL_FMT_NV12    = 1,
+    EX_CUBECL_FMT_RGB24   = 2,
+    EX_CUBECL_FMT_RGBA    = 3,
+} ex_cubecl_pixel_format_t;
 
 /* ---------------------------------------------------------------------------
  * Error handling
@@ -255,6 +275,111 @@ int ex_cubecl_pipeline_run(ex_cubecl_pipeline_handle_t pipeline);
  * @return         0 on success, -1 on error.
  */
 int ex_cubecl_pipeline_free(ex_cubecl_pipeline_handle_t pipeline);
+
+/* ---------------------------------------------------------------------------
+ * Phase 2 — GPU Texture (Video Frame)
+ * --------------------------------------------------------------------------- */
+
+/**
+ * Create a GPU texture from YUV420p plane data.
+ *
+ * Uploads Y and UV planes to a GPU texture suitable for video processing
+ * kernels. The texture can be used as input to filter kernels.
+ *
+ * @param y_plane   Pointer to Y plane data (width * height bytes).
+ * @param uv_plane  Pointer to UV plane data (width * height / 2 bytes).
+ * @param width     Texture width in pixels.
+ * @param height    Texture height in pixels.
+ * @return          Texture handle, or 0 on error.
+ */
+ex_cubecl_texture_handle_t ex_cubecl_texture_from_yuv(
+    const uint8_t *y_plane,
+    const uint8_t *uv_plane,
+    uint32_t width,
+    uint32_t height);
+
+/**
+ * Create a GPU texture from NV12 plane data.
+ *
+ * @param y_plane   Pointer to Y plane data.
+ * @param uv_plane  Pointer to interleaved UV plane data.
+ * @param width     Texture width in pixels.
+ * @param height    Texture height in pixels.
+ * @return          Texture handle, or 0 on error.
+ */
+ex_cubecl_texture_handle_t ex_cubecl_texture_from_nv12(
+    const uint8_t *y_plane,
+    const uint8_t *uv_plane,
+    uint32_t width,
+    uint32_t height);
+
+/**
+ * Apply a named GPU kernel to a texture (filter chain).
+ *
+ * This is the primary entry point for video filter operations on mobile.
+ * The kernel is applied in-place or to the output texture.
+ *
+ * @param input         Input texture handle.
+ * @param kernel_name   Kernel name (e.g. "gaussian_blur", "lut_apply").
+ * @param params        Array of kernel parameters.
+ * @param param_count   Number of parameters.
+ * @return              Output texture handle, or 0 on error.
+ */
+ex_cubecl_texture_handle_t ex_cubecl_apply_kernel(
+    ex_cubecl_texture_handle_t input,
+    const char *kernel_name,
+    const void *params,
+    size_t param_count);
+
+/**
+ * Free a GPU texture.
+ *
+ * @param texture Texture handle.
+ * @return        0 on success, -1 on error.
+ */
+int ex_cubecl_texture_free(ex_cubecl_texture_handle_t texture);
+
+/* ---------------------------------------------------------------------------
+ * Phase 2 — Media Source
+ * --------------------------------------------------------------------------- */
+
+/**
+ * Open a media source (file, stream, camera).
+ *
+ * @param path  File path or URL (rtmp://, http://, etc.).
+ * @return      Media handle, or 0 on error.
+ */
+ex_cubecl_media_handle_t ex_cubecl_media_open(const char *path);
+
+/**
+ * Close a media source.
+ *
+ * @param media Media handle.
+ * @return      0 on success, -1 on error.
+ */
+int ex_cubecl_media_close(ex_cubecl_media_handle_t media);
+
+/* ---------------------------------------------------------------------------
+ * Phase 2 — Audio Mix
+ * --------------------------------------------------------------------------- */
+
+/**
+ * Mix multiple audio tracks on the GPU.
+ *
+ * Sums N audio tracks with per-channel gain into a single output buffer.
+ * All tracks must have the same sample count.
+ *
+ * @param tracks       Array of input buffer handles.
+ * @param gains        Array of gain values (one per track).
+ * @param track_count  Number of tracks.
+ * @param frames       Number of samples per channel.
+ * @return             Output buffer handle, or 0 on error.
+ */
+ex_cubecl_buffer_handle_t ex_cubecl_audio_mix(
+    const ex_cubecl_buffer_handle_t *tracks,
+    const float *gains,
+    size_t track_count,
+    size_t frames);
 
 #ifdef __cplusplus
 }

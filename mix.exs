@@ -1,7 +1,7 @@
 defmodule ExCubecl.MixProject do
   use Mix.Project
 
-  @version "0.3.0"
+  @version "0.4.0"
   @source_url "https://github.com/ohhi-vn/ex_cubecl"
 
   def project do
@@ -18,7 +18,8 @@ defmodule ExCubecl.MixProject do
       name: "ExCubecl",
       source_url: @source_url,
       homepage_url: @source_url,
-      elixirc_paths: elixirc_paths(Mix.env())
+      elixirc_paths: elixirc_paths(Mix.env()),
+      aliases: aliases()
     ]
   end
 
@@ -35,7 +36,15 @@ defmodule ExCubecl.MixProject do
   defp deps do
     [
       {:rustler, "~> 0.37", runtime: false},
-      {:ex_doc, "~> 0.40", only: :dev, runtime: false}
+      {:ex_doc, "~> 0.40", only: :dev, runtime: false},
+      # Phase 2: .cube LUT file parser (optional, pure Elixir)
+      {:nimble_parsec, "~> 1.4", optional: true}
+    ]
+  end
+
+  defp aliases do
+    [
+      "rustler.build": ["cmd cargo build --manifest-path native/ex_cubecl_nif/Cargo.toml"]
     ]
   end
 
@@ -98,7 +107,12 @@ defmodule ExCubecl.MixProject do
         "guides/03_kernels.md",
         "guides/04_async_pipelines.md",
         "guides/05_mobile.md",
-        "guides/06_examples.md"
+        "guides/06_examples.md",
+        "guides/07_media_quickstart.md",
+        "guides/08_video_processing.md",
+        "guides/09_audio_processing.md",
+        "guides/10_transcode.md",
+        "guides/11_realtime_pipeline.md"
       ],
       groups_for_extras: [
         Guides: ~r/guides\/[0-9]+_.*\.md/,
@@ -106,6 +120,10 @@ defmodule ExCubecl.MixProject do
       ],
       groups_for_modules: [
         "GPU Runtime": [ExCubecl],
+        "Media I/O": [ExCubecl.Media, ExCubecl.Video, ExCubecl.Audio],
+        "Filters & Transcode": [ExCubecl.Filter, ExCubecl.Transcode],
+        Streaming: [ExCubecl.MediaPipeline],
+        Types: [ExCubecl.VideoFrame, ExCubecl.AudioSamples],
         "Pipeline Commands": [ExCubecl.Command],
         "NIF Stubs": [ExCubecl.NIF]
       ],

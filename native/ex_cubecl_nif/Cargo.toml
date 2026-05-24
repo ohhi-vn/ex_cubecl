@@ -1,10 +1,10 @@
 [package]
 name = "ex_cubecl_nif"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 license = "Apache-2.0"
-description = "GPU compute runtime for CubeCL via Rust NIFs"
-repository = "https://github.com/tracel-ai/cubecl"
+description = "GPU compute runtime for CubeCL via Rust NIFs — media processing extension"
+repository = "https://github.com/ohhi-vn/ex_cubecl"
 
 [lib]
 name = "ex_cubecl_nif"
@@ -20,6 +20,14 @@ num_cpus = "1"
 # NOTE: CubeCL GPU integration is prepared but commented out until the crate
 # is published with the needed features. Uncomment when ready:
 # cubecl = { version = "0.1", features = ["wgpu"], optional = true }
+
+# NOTE: FFmpeg media I/O is prepared but commented out until system
+# libraries (libavcodec, libavformat, libavfilter, libswresample >= 6.x)
+# are available. Uncomment when ready:
+# ffmpeg-next = "7"
+
+# NOTE: Audio resampling — uncomment when ready:
+# rubato = "0.16"
 
 [features]
 default = ["wgpu"]

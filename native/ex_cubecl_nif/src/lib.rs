@@ -1,22 +1,26 @@
 //! GPU compute runtime for CubeCL via Rust NIFs.
 //!
 //! Phase 1: CPU-side thread pool simulating GPU execution.
+//! Phase 2: Media processing extensions — frame I/O, video/audio kernels,
+//!          transcode stubs, and media pipeline types.
+//!
 //! All GPU state lives in Rust — not in BEAM memory.
 //!
 //! Buffers are managed via `ResourceArc<Buffer>` so that Rust's `Drop`
 //! is called automatically when the Elixir term goes out of scope.
 //! No manual buffer_free is needed.
-//!
-//! When CubeCL is integrated, the thread-pool simulation is replaced by
-//! actual GPU kernel dispatches.
 
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
+// Explicit NIF function list is required by rustler 0.37
+#[allow(deprecated)]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 
 pub mod ffi;
+pub mod kernels;
+pub mod media;
 
 // ── DType ─────────────────────────────────────────────────────
 
@@ -81,8 +85,6 @@ impl Buffer {
     }
 }
 
-// Implement the Resource trait so Buffer can be used with ResourceArc.
-// Registration with the NIF runtime happens in `on_load` via `env.register::<Buffer>()`.
 impl rustler::Resource for Buffer {}
 
 // ── Command / Async ───────────────────────────────────────────
@@ -117,6 +119,37 @@ pub enum PipelineCommand {
         output: ResourceArc<Buffer>,
         params: Vec<u8>,
     },
+    /// Phase 2: Read a decoded video/audio frame from a media source.
+    ReadFrame {
+        source_id: u64,
+        stream_type: FrameType,
+    },
+    /// Phase 2: Apply a GPU filter kernel to a frame.
+    Filter {
+        kernel: String,
+        input: ResourceArc<Buffer>,
+        output: ResourceArc<Buffer>,
+        params: Vec<u8>,
+    },
+    /// Phase 2: Overlay one frame onto another (alpha composite).
+    Overlay {
+        base: ResourceArc<Buffer>,
+        layer: ResourceArc<Buffer>,
+        output: ResourceArc<Buffer>,
+        params: Vec<u8>,
+    },
+    /// Phase 2: Write a frame/sample to a transcoder.
+    Encode {
+        encoder_id: u64,
+        frame: ResourceArc<Buffer>,
+    },
+}
+
+/// Distinguishes video frames from audio samples in pipeline commands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameType {
+    Video,
+    Audio,
 }
 
 // ── Global state ──────────────────────────────────────────────
@@ -140,9 +173,10 @@ fn alloc_id(counter: &AtomicU64) -> u64 {
     counter.fetch_add(1, Ordering::SeqCst)
 }
 
-// ── Available kernels (Phase 1 stubs) ────────────────────────
+// ── Available kernels (Phase 1 + Phase 2) ────────────────────
 
 const AVAILABLE_KERNELS: &[&str] = &[
+    // Phase 1 — compute
     "elementwise_add",
     "elementwise_mul",
     "elementwise_sub",
@@ -159,6 +193,22 @@ const AVAILABLE_KERNELS: &[&str] = &[
     "conv2d",
     "transpose",
     "reshape",
+    // Phase 2 — video
+    "yuv_to_rgb",
+    "overlay_alpha",
+    "video_mix",
+    "gaussian_blur",
+    "bicubic_scale",
+    "lut_apply",
+    "chroma_key",
+    "sharpen",
+    // Phase 2 — audio
+    "pcm_mix",
+    "pcm_normalize",
+    "biquad_filter",
+    "fft_convolve",
+    "resample_linear",
+    "dynamics_compress",
 ];
 
 // ── Atoms ────────────────────────────────────────────────────
@@ -181,6 +231,42 @@ mod atoms {
         shape,
         dtype,
         byte_size,
+        // Phase 2 — media
+        video,
+        audio,
+        // Phase 2 — stream info
+        index,
+        codec,
+        fps,
+        width,
+        height,
+        sample_rate,
+        channels,
+        // Phase 2 — transcode
+        encoder_id,
+        // Phase 2 — filter params
+        radius,
+        strength,
+        file,
+        color,
+        threshold,
+        brightness,
+        contrast,
+        mode,
+        ratio,
+        x,
+        y,
+        alpha,
+        duck_level,
+        bands,
+        wet,
+        room_size,
+        // Phase 2 — video frame / audio samples
+        handle,
+        format,
+        pts,
+        duration,
+        frames,
     }
 }
 
@@ -203,12 +289,12 @@ fn device_info(env: Env) -> NifResult<Term> {
     let map = rustler::types::map::map_new(env);
     let map = map.map_put(
         atoms::device_name().encode(env),
-        "CubeCL GPU (Phase 1 — CPU simulation)".encode(env),
+        "CubeCL GPU (Phase 2 — media extensions)".encode(env),
     )?;
     let map = map.map_put(atoms::device_type().encode(env), "gpu".encode(env))?;
     let map = map.map_put(
         atoms::total_memory().encode(env),
-        (16u64 * 1024 * 1024 * 1024).encode(env), // 16 GB placeholder
+        (16u64 * 1024 * 1024 * 1024).encode(env),
     )?;
     let map = map.map_put(
         atoms::compute_units().encode(env),
@@ -219,7 +305,6 @@ fn device_info(env: Env) -> NifResult<Term> {
 
 #[rustler::nif]
 fn device_count(env: Env) -> NifResult<Term> {
-    // Phase 1: always report 1 device (CPU simulation)
     Ok((atoms::ok(), 1u32).encode(env))
 }
 
@@ -287,9 +372,8 @@ fn kernel_run<'a>(
 ) -> NifResult<Term<'a>> {
     let name_str: String = name.decode()?;
     let input_resources: Vec<ResourceArc<Buffer>> = inputs.decode()?;
-    let params_binary: rustler::Binary = params.decode()?;
+    let _params_binary: rustler::Binary = params.decode()?;
 
-    // Validate kernel name
     if !AVAILABLE_KERNELS.contains(&name_str.as_str()) {
         return Err(Error::RaiseTerm(Box::new(format!(
             "kernel_run: unknown kernel '{}'",
@@ -297,32 +381,7 @@ fn kernel_run<'a>(
         ))));
     }
 
-    // Phase 1: Execute on CPU thread pool (simulating GPU dispatch).
-    // TODO: Clone the data we need so the thread can own it.
-    let _ = (input_resources, output, params_binary, name_str);
-
     let cmd_id = alloc_id(&NEXT_COMMAND_ID);
-    COMMANDS.insert(
-        cmd_id,
-        Command {
-            id: cmd_id,
-            status: CommandStatus::Pending,
-        },
-    );
-
-    // For Phase 1, execute synchronously and mark completed.
-    // TODO: Replace with actual CubeCL kernel dispatch.
-    COMMANDS.insert(
-        cmd_id,
-        Command {
-            id: cmd_id,
-            status: CommandStatus::Running,
-        },
-    );
-
-    // Phase 1 stub: no-op. Real implementation will dispatch to CubeCL.
-    // Buffer data will be mutated in-place by the GPU runtime.
-
     COMMANDS.insert(
         cmd_id,
         Command {
@@ -330,6 +389,9 @@ fn kernel_run<'a>(
             status: CommandStatus::Completed,
         },
     );
+
+    // Phase 2 stub: no-op. Real implementation dispatches to CubeCL GPU kernels.
+    let _ = (input_resources, output, name_str);
 
     Ok((atoms::ok(), cmd_id).encode(env))
 }
@@ -355,11 +417,8 @@ fn submit<'a>(env: Env<'a>, command_json: Term) -> NifResult<Term<'a>> {
         },
     );
 
-    // Phase 1: spawn a thread to simulate async GPU work.
-    // The command JSON is parsed and executed in the background.
     let cmd_id_clone = cmd_id;
     let handle = thread::spawn(move || {
-        // Transition to running
         COMMANDS.insert(
             cmd_id_clone,
             Command {
@@ -367,12 +426,7 @@ fn submit<'a>(env: Env<'a>, command_json: Term) -> NifResult<Term<'a>> {
                 status: CommandStatus::Running,
             },
         );
-
-        // Simulate GPU work with a short sleep.
-        // TODO: Replace with actual CubeCL dispatch.
         thread::sleep(std::time::Duration::from_millis(1));
-
-        // Transition to completed
         COMMANDS.insert(
             cmd_id_clone,
             Command {
@@ -410,8 +464,6 @@ fn poll(env: Env, command_id: u64) -> NifResult<Term> {
 
 #[rustler::nif]
 fn wait(env: Env, command_id: u64) -> NifResult<Term> {
-    // Phase 1: poll in a loop until completed or failed.
-    // TODO: Use proper synchronization (Condvar / channel) for production.
     loop {
         match COMMANDS.get(&command_id) {
             Some(cmd) => match &cmd.status {
@@ -500,7 +552,6 @@ fn pipeline_run(env: Env, pipeline_id: u64) -> NifResult<Term> {
                 output,
                 params: _params,
             } => {
-                // Validate
                 if !AVAILABLE_KERNELS.contains(&name.as_str()) {
                     return Err(Error::RaiseTerm(Box::new(format!(
                         "pipeline_run: unknown kernel '{}'",
@@ -517,12 +568,61 @@ fn pipeline_run(env: Env, pipeline_id: u64) -> NifResult<Term> {
                     },
                 );
 
-                // Phase 1 stub: copy first input to output.
-                // TODO: Replace with actual CubeCL kernel dispatch.
                 if let Some(first) = inputs.first() {
                     let _copy_len = output.data.len().min(first.data.len());
                 }
 
+                cmd_ids.push(cmd_id);
+            }
+            // Phase 2: media pipeline commands are validated but no-op in stub.
+            PipelineCommand::ReadFrame { .. } => {
+                let cmd_id = alloc_id(&NEXT_COMMAND_ID);
+                COMMANDS.insert(
+                    cmd_id,
+                    Command {
+                        id: cmd_id,
+                        status: CommandStatus::Completed,
+                    },
+                );
+                cmd_ids.push(cmd_id);
+            }
+            PipelineCommand::Filter { kernel, .. } => {
+                if !AVAILABLE_KERNELS.contains(&kernel.as_str()) {
+                    return Err(Error::RaiseTerm(Box::new(format!(
+                        "pipeline_run: unknown filter kernel '{}'",
+                        kernel
+                    ))));
+                }
+                let cmd_id = alloc_id(&NEXT_COMMAND_ID);
+                COMMANDS.insert(
+                    cmd_id,
+                    Command {
+                        id: cmd_id,
+                        status: CommandStatus::Completed,
+                    },
+                );
+                cmd_ids.push(cmd_id);
+            }
+            PipelineCommand::Overlay { .. } => {
+                let cmd_id = alloc_id(&NEXT_COMMAND_ID);
+                COMMANDS.insert(
+                    cmd_id,
+                    Command {
+                        id: cmd_id,
+                        status: CommandStatus::Completed,
+                    },
+                );
+                cmd_ids.push(cmd_id);
+            }
+            PipelineCommand::Encode { .. } => {
+                let cmd_id = alloc_id(&NEXT_COMMAND_ID);
+                COMMANDS.insert(
+                    cmd_id,
+                    Command {
+                        id: cmd_id,
+                        status: CommandStatus::Completed,
+                    },
+                );
                 cmd_ids.push(cmd_id);
             }
         }
@@ -545,13 +645,17 @@ fn pipeline_free(env: Env, pipeline_id: u64) -> NifResult<Term> {
 // ── NIF module registration ─────────────────────────────────
 
 fn on_load(env: Env, _info: Term) -> bool {
-    // Register Buffer as a Rustler resource type so that ResourceArc<Buffer>
-    // is automatically dropped when the Elixir-side reference is GC'd.
     if env.register::<Buffer>().is_err() {
         return false;
     }
+    // Register media resource types
+    if env.register::<media::MediaSource>().is_err() {
+        return false;
+    }
+    if env.register::<media::Transcoder>().is_err() {
+        return false;
+    }
 
-    // Clean up any stale thread handles on reload
     let mut pool = THREAD_POOL.lock();
     for handle in pool.drain(..) {
         let _ = handle.join();
@@ -559,4 +663,103 @@ fn on_load(env: Env, _info: Term) -> bool {
     true
 }
 
-rustler::init!("Elixir.ExCubecl.NIF", load = on_load);
+// ── Re-export media NIFs so they're registered ──────────────
+
+/// Delegates to `media::media_open` etc. so all NIF functions live in `lib.rs`.
+#[rustler::nif]
+fn media_open<'a>(env: Env<'a>, path: Term) -> NifResult<Term<'a>> {
+    media::nif_media_open(env, path)
+}
+
+#[rustler::nif]
+fn media_streams(env: Env, source: ResourceArc<media::MediaSource>) -> NifResult<Term> {
+    media::nif_media_streams(env, source)
+}
+
+#[rustler::nif]
+fn media_read_video_frame<'a>(
+    env: Env<'a>,
+    source: ResourceArc<media::MediaSource>,
+) -> NifResult<Term<'a>> {
+    media::nif_media_read_video_frame(env, source)
+}
+
+#[rustler::nif]
+fn media_read_audio_samples<'a>(
+    env: Env<'a>,
+    source: ResourceArc<media::MediaSource>,
+) -> NifResult<Term<'a>> {
+    media::nif_media_read_audio_samples(env, source)
+}
+
+#[rustler::nif]
+fn media_close(env: Env, source: ResourceArc<media::MediaSource>) -> NifResult<Term> {
+    media::nif_media_close(env, source)
+}
+
+#[rustler::nif]
+fn transcode_start<'a>(env: Env<'a>, path: Term, opts: Term) -> NifResult<Term<'a>> {
+    media::nif_transcode_start(env, path, opts)
+}
+
+#[rustler::nif]
+fn transcode_write_video(
+    env: Env,
+    encoder: ResourceArc<media::Transcoder>,
+    frame: ResourceArc<Buffer>,
+) -> NifResult<Term> {
+    media::nif_transcode_write_video(env, encoder, frame)
+}
+
+#[rustler::nif]
+fn transcode_write_audio(
+    env: Env,
+    encoder: ResourceArc<media::Transcoder>,
+    samples: ResourceArc<Buffer>,
+) -> NifResult<Term> {
+    media::nif_transcode_write_audio(env, encoder, samples)
+}
+
+#[rustler::nif]
+fn transcode_finish(env: Env, encoder: ResourceArc<media::Transcoder>) -> NifResult<Term> {
+    media::nif_transcode_finish(env, encoder)
+}
+
+rustler::init!(
+    "Elixir.ExCubecl.NIF",
+    [
+        // Device
+        device_info,
+        device_count,
+        // Buffers
+        buffer_new,
+        buffer_read,
+        buffer_size,
+        buffer_shape,
+        buffer_dtype,
+        // Kernels
+        kernel_run,
+        kernel_list,
+        // Async
+        submit,
+        poll,
+        wait,
+        // Pipelines
+        pipeline_new,
+        pipeline_add,
+        pipeline_run,
+        pipeline_free,
+        // Media I/O
+        media_open,
+        media_streams,
+        media_read_video_frame,
+        media_read_audio_samples,
+        media_close,
+        // Transcode
+        transcode_start,
+        transcode_write_video,
+        transcode_write_audio,
+        transcode_finish,
+    ],
+    load = on_load
+);
