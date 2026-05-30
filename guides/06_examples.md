@@ -28,8 +28,8 @@ pixels = Enum.to_list(10..250//10) |> Enum.take(25)
 {:ok, output} = ExCubecl.buffer(List.duplicate(0.0, 25), [5, 5], :f32)
 
 # Run kernels
-{:ok, _cmd1} = ExCubecl.run_kernel("blur", [padded], blurred)
-{:ok, _cmd2} = ExCubecl.run_kernel("edge_detect", [blurred], output)
+{:ok, _cmd1} = ExCubecl.run_kernel("gaussian_blur", [padded], blurred)
+{:ok, _cmd2} = ExCubecl.run_kernel("elementwise_add", [blurred], output)
 
 # Read result
 {:ok, result} = ExCubecl.read(output)

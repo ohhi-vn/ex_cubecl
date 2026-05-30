@@ -60,7 +60,7 @@ defmodule ExCubecl do
   alias ExCubecl.NIF
   alias ExCubecl.Command
 
-  @version "0.2.0"
+  @version "0.4.0"
 
   @dtypes ~w(f32 f64 s32 s64 u32 u8)
 
@@ -110,11 +110,9 @@ defmodule ExCubecl do
   """
   @spec buffer!(list(), [non_neg_integer()], atom()) :: reference()
   def buffer!(data, shape, type \\ :f32) do
-    case apply(NIF, :buffer_new, [
-           list_to_binary(data, dtype_to_string(type)),
-           shape,
-           dtype_to_string(type)
-         ]) do
+    dtype_str = dtype_to_string(type)
+
+    case NIF.buffer_new(list_to_binary(data, dtype_str), shape, dtype_str) do
       {:ok, buf} -> buf
       {:error, reason} -> raise "ExCubecl.buffer!/3 failed: #{inspect(reason)}"
     end
@@ -131,7 +129,7 @@ defmodule ExCubecl do
   """
   @spec read!(reference()) :: binary()
   def read!(buf) when is_reference(buf) do
-    case apply(NIF, :buffer_read, [buf]) do
+    case NIF.buffer_read(buf) do
       {:ok, data} -> data
       {:error, reason} -> raise "ExCubecl.read!/1 failed: #{inspect(reason)}"
     end
@@ -259,7 +257,7 @@ defmodule ExCubecl do
   """
   @spec available?() :: boolean()
   def available? do
-    case apply(NIF, :device_count, []) do
+    case NIF.device_count() do
       {:ok, _} -> true
       {:error, _} -> false
     end

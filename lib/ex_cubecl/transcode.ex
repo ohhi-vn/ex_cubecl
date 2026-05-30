@@ -99,20 +99,12 @@ defmodule ExCubecl.Transcode do
 
   @doc "Writes a video frame to the encoder."
   @spec write_frame(encoder(), VideoFrame.t()) :: :ok | {:error, term()}
-  def write_frame(%VideoFrame{} = frame, enc) when is_reference(enc) do
-    NIF.transcode_write_video(enc, frame.handle)
-  end
-
   def write_frame(enc, %VideoFrame{} = frame) when is_reference(enc) do
     NIF.transcode_write_video(enc, frame.handle)
   end
 
   @doc "Writes audio samples to the encoder."
   @spec write_samples(encoder(), AudioSamples.t()) :: :ok | {:error, term()}
-  def write_samples(%AudioSamples{} = samples, enc) when is_reference(enc) do
-    NIF.transcode_write_audio(enc, samples.handle)
-  end
-
   def write_samples(enc, %AudioSamples{} = samples) when is_reference(enc) do
     NIF.transcode_write_audio(enc, samples.handle)
   end

@@ -1,6 +1,6 @@
 # Buffer Management
 
-Buffers are GPU memory regions managed via opaque integer handles.
+Buffers are GPU memory regions managed via Rustler `ResourceArc` references. When the Elixir term holding a buffer is garbage collected, the underlying GPU memory is automatically freed.
 
 ## Creating Buffers
 

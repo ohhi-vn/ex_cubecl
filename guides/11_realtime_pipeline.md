@@ -101,7 +101,7 @@ defmodule MultiStage do
 
     # Stage 3: Composite
     {:ok, composited} = ExCubecl.Video.overlay(graded, state.lower_third,
-      x: 50, y: state.height - 100)
+      x: 50, y: 620, alpha: 1.0)
 
     # Stage 4: Encode
     :ok = ExCubecl.Transcode.write_frame(state.encoder, composited)
@@ -118,13 +118,19 @@ defmodule RobustPipeline do
   use ExCubecl.MediaPipeline
 
   def handle_frame(frame, state) do
-    try do
-      {:ok, processed} = ExCubecl.Filter.apply(frame, :gaussian_blur, radius: 2)
-      :ok = ExCubecl.Transcode.write_frame(state.encoder, processed)
-      {:ok, state}
-    rescue
-      e ->
-        IO.puts("Frame processing error: #{inspect(e)}")
+    case ExCubecl.Filter.apply(frame, :gaussian_blur, radius: 2) do
+      {:ok, processed} ->
+        case ExCubecl.Transcode.write_frame(state.encoder, processed) do
+          :ok ->
+            {:ok, state}
+
+          {:error, reason} ->
+            IO.puts("Encode error: #{inspect(reason)}")
+            {:ok, state}  # Continue with next frame
+        end
+
+      {:error, reason} ->
+        IO.puts("Filter error: #{inspect(reason)}")
         {:ok, state}  # Continue with next frame
     end
   end

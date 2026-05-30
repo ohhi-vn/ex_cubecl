@@ -99,10 +99,15 @@ Uses GPU-accelerated linear interpolation. For higher quality, use the
 ## Pipeline Integration
 
 ```elixir
-ExCubecl.pipeline()
-|> ExCubecl.pipeline_add(%{op: :read_frame, source: src})
-|> ExCubecl.pipeline_add(%{op: :filter, kernel: :pcm_mix, params: %{gains: [0.7, 0.5]}})
-|> ExCubecl.pipeline_add(%{op: :filter, kernel: :biquad_filter, params: %{bands: [{:high_pass, 80}]}})
-|> ExCubecl.pipeline_add(%{op: :encode, encoder: enc})
-|> ExCubecl.pipeline_run()
+{:ok, track_a} = ExCubecl.AudioSamples.from_map(audio_map_a)
+{:ok, track_b} = ExCubecl.AudioSamples.from_map(audio_map_b)
+{:ok, mixed} = ExCubecl.buffer(List.duplicate(0.0, 1024 * 2), [1024 * 2], :f32)
+{:ok, filtered} = ExCubecl.buffer(List.duplicate(0.0, 1024 * 2), [1024 * 2], :f32)
+{:ok, output} = ExCubecl.buffer(List.duplicate(0.0, 1024 * 2), [1024 * 2], :f32)
+
+{:ok, pipeline} = ExCubecl.pipeline()
+:ok = ExCubecl.pipeline_add(pipeline, "pcm_mix", [track_a.handle, track_b.handle], mixed, %{gains: [0.7, 0.5]})
+:ok = ExCubecl.pipeline_add(pipeline, "biquad_filter", [mixed], filtered, %{high_pass: 80})
+{:ok, _cmd_ids} = ExCubecl.pipeline_run(pipeline)
+:ok = ExCubecl.pipeline_free(pipeline)
 ```

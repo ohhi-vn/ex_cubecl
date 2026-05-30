@@ -5,7 +5,7 @@ GPU filters, transcoding, and real-time streaming pipelines.
 
 ## Prerequisites
 
-- ExCubecl v0.3.0+
+- ExCubecl v0.4.0+
 - FFmpeg ≥ 6.x libraries (libavcodec, libavformat, libavfilter, libswresample)
   - macOS: `brew install ffmpeg`
   - Ubuntu: `apt install libavcodec-dev libavformat-dev libavfilter-dev libswresample-dev`

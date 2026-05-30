@@ -110,10 +110,10 @@ Run an entire pipeline asynchronously:
 
 ```elixir
 {:ok, pipeline} = ExCubecl.pipeline()
-:ok = ExCubecl.pipeline_add(pipeline, "blur", [buf_in], buf_blur)
+:ok = ExCubecl.pipeline_add(pipeline, "gaussian_blur", [buf_in], buf_blur)
 :ok = ExCubecl.pipeline_add(pipeline, "relu", [buf_blur], buf_out)
 
-# Run pipeline async
-{:ok, cmd_id} = ExCubecl.submit("run_pipeline")
-:ok = ExCubecl.wait(cmd_id)
+# Run pipeline synchronously (pipelines are already sequential on the GPU)
+{:ok, _cmd_ids} = ExCubecl.pipeline_run(pipeline)
+:ok = ExCubecl.pipeline_free(pipeline)
 ```

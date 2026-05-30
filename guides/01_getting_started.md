@@ -8,7 +8,7 @@ Add to your `mix.exs`:
 
 ```elixir
 def deps do
-  [{:ex_cubecl, "~> 0.2.0"}]
+  [{:ex_cubecl, "~> 0.4.0"}]
 end
 ```
 
@@ -97,7 +97,7 @@ Compose multiple GPU operations into a single executable graph:
 
 ```elixir
 ExCubecl.available?()    # true if NIF is loaded
-ExCubecl.version()       # "0.2.0"
+ExCubecl.version()       # "0.4.0"
 ExCubecl.device_info()   # %{device_name: "...", device_type: "gpu", ...}
 ExCubecl.device_count()  # 1
 ```

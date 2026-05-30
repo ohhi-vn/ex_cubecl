@@ -119,11 +119,16 @@ performance-critical paths.
 ## Pipeline Integration
 
 ```elixir
-ExCubecl.pipeline()
-|> ExCubecl.pipeline_add(%{op: :read_frame, source: src})
-|> ExCubecl.pipeline_add(%{op: :filter, kernel: :gaussian_blur, params: %{radius: 3}})
-|> ExCubecl.pipeline_add(%{op: :filter, kernel: :lut, params: %{file: "warm.cube"}})
-|> ExCubecl.pipeline_add(%{op: :overlay, layer: watermark, params: %{x: 20, y: 20}})
-|> ExCubecl.pipeline_add(%{op: :encode, encoder: enc})
-|> ExCubecl.pipeline_run()
+{:ok, src} = ExCubecl.Media.open("input.mp4")
+{:ok, frame} = ExCubecl.Media.read_frame(src, :video)
+{:ok, blurred} = ExCubecl.buffer(List.duplicate(0.0, 1920 * 1080), [1920 * 1080], :f32)
+{:ok, graded} = ExCubecl.buffer(List.duplicate(0.0, 1920 * 1080), [1920 * 1080], :f32)
+{:ok, output} = ExCubecl.buffer(List.duplicate(0.0, 1920 * 1080), [1920 * 1080], :f32)
+
+{:ok, pipeline} = ExCubecl.pipeline()
+:ok = ExCubecl.pipeline_add(pipeline, "gaussian_blur", [frame.handle], blurred, %{radius: 3})
+:ok = ExCubecl.pipeline_add(pipeline, "lut_apply", [blurred], graded, %{file: "warm.cube"})
+:ok = ExCubecl.pipeline_add(pipeline, "overlay_alpha", [graded, watermark.handle], output, %{x: 20, y: 20, alpha: 1.0})
+{:ok, _cmd_ids} = ExCubecl.pipeline_run(pipeline)
+:ok = ExCubecl.pipeline_free(pipeline)
 ```

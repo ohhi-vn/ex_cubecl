@@ -13,8 +13,6 @@
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
-// Explicit NIF function list is required by rustler 0.37
-#[allow(deprecated)]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 
@@ -321,10 +319,14 @@ fn buffer_new<'a>(env: Env<'a>, data: Term, shape: Term, dtype_str: Term) -> Nif
     let actual_bytes = data_binary.len();
 
     if actual_bytes != expected_bytes {
-        return Err(Error::RaiseTerm(Box::new(format!(
-            "buffer_new: expected {} bytes (shape={:?}, dtype={}), got {}",
-            expected_bytes, shape_vec, dtype_string, actual_bytes
-        ))));
+        return Ok((
+            atoms::error(),
+            format!(
+                "buffer_new: expected {} bytes (shape={:?}, dtype={}), got {}",
+                expected_bytes, shape_vec, dtype_string, actual_bytes
+            ),
+        )
+            .encode(env));
     }
 
     let buffer = Buffer {
@@ -375,10 +377,11 @@ fn kernel_run<'a>(
     let _params_binary: rustler::Binary = params.decode()?;
 
     if !AVAILABLE_KERNELS.contains(&name_str.as_str()) {
-        return Err(Error::RaiseTerm(Box::new(format!(
-            "kernel_run: unknown kernel '{}'",
-            name_str
-        ))));
+        return Ok((
+            atoms::error(),
+            format!("kernel_run: unknown kernel '{}'", name_str),
+        )
+            .encode(env));
     }
 
     let cmd_id = alloc_id(&NEXT_COMMAND_ID);
@@ -449,16 +452,15 @@ fn poll(env: Env, command_id: u64) -> NifResult<Term> {
                 CommandStatus::Pending => atoms::pending(),
                 CommandStatus::Running => atoms::running(),
                 CommandStatus::Completed => atoms::completed(),
-                CommandStatus::Failed(ref msg) => {
-                    return Ok((atoms::error(), msg.clone()).encode(env));
-                }
+                CommandStatus::Failed(_) => atoms::failed(),
             };
             Ok((atoms::ok(), status_atom).encode(env))
         }
-        None => Err(Error::RaiseTerm(Box::new(format!(
-            "poll: invalid command_id {}",
-            command_id
-        )))),
+        None => Ok((
+            atoms::error(),
+            format!("poll: invalid command_id {}", command_id),
+        )
+            .encode(env)),
     }
 }
 
@@ -476,10 +478,11 @@ fn wait(env: Env, command_id: u64) -> NifResult<Term> {
                 }
             },
             None => {
-                return Err(Error::RaiseTerm(Box::new(format!(
-                    "wait: invalid command_id {}",
-                    command_id
-                ))));
+                return Ok((
+                    atoms::error(),
+                    format!("wait: invalid command_id {}", command_id),
+                )
+                    .encode(env));
             }
         }
     }
@@ -523,10 +526,11 @@ fn pipeline_add<'a>(
             });
             Ok((atoms::ok()).encode(env))
         }
-        None => Err(Error::RaiseTerm(Box::new(format!(
-            "pipeline_add: invalid pipeline_id {}",
-            pipeline_id
-        )))),
+        None => Ok((
+            atoms::error(),
+            format!("pipeline_add: invalid pipeline_id {}", pipeline_id),
+        )
+            .encode(env)),
     }
 }
 
@@ -535,10 +539,11 @@ fn pipeline_run(env: Env, pipeline_id: u64) -> NifResult<Term> {
     let pipeline = match PIPELINES.get(&pipeline_id) {
         Some(p) => p.clone(),
         None => {
-            return Err(Error::RaiseTerm(Box::new(format!(
-                "pipeline_run: invalid pipeline_id {}",
-                pipeline_id
-            ))));
+            return Ok((
+                atoms::error(),
+                format!("pipeline_run: invalid pipeline_id {}", pipeline_id),
+            )
+                .encode(env));
         }
     };
 
@@ -548,15 +553,16 @@ fn pipeline_run(env: Env, pipeline_id: u64) -> NifResult<Term> {
         match cmd {
             PipelineCommand::KernelRun {
                 name,
-                inputs,
-                output,
+                inputs: _inputs,
+                output: _output,
                 params: _params,
             } => {
                 if !AVAILABLE_KERNELS.contains(&name.as_str()) {
-                    return Err(Error::RaiseTerm(Box::new(format!(
-                        "pipeline_run: unknown kernel '{}'",
-                        name
-                    ))));
+                    return Ok((
+                        atoms::error(),
+                        format!("pipeline_run: unknown kernel '{}'", name),
+                    )
+                        .encode(env));
                 }
 
                 let cmd_id = alloc_id(&NEXT_COMMAND_ID);
@@ -567,10 +573,6 @@ fn pipeline_run(env: Env, pipeline_id: u64) -> NifResult<Term> {
                         status: CommandStatus::Completed,
                     },
                 );
-
-                if let Some(first) = inputs.first() {
-                    let _copy_len = output.data.len().min(first.data.len());
-                }
 
                 cmd_ids.push(cmd_id);
             }
@@ -588,10 +590,11 @@ fn pipeline_run(env: Env, pipeline_id: u64) -> NifResult<Term> {
             }
             PipelineCommand::Filter { kernel, .. } => {
                 if !AVAILABLE_KERNELS.contains(&kernel.as_str()) {
-                    return Err(Error::RaiseTerm(Box::new(format!(
-                        "pipeline_run: unknown filter kernel '{}'",
-                        kernel
-                    ))));
+                    return Ok((
+                        atoms::error(),
+                        format!("pipeline_run: unknown filter kernel '{}'", kernel),
+                    )
+                        .encode(env));
                 }
                 let cmd_id = alloc_id(&NEXT_COMMAND_ID);
                 COMMANDS.insert(
@@ -635,10 +638,11 @@ fn pipeline_run(env: Env, pipeline_id: u64) -> NifResult<Term> {
 fn pipeline_free(env: Env, pipeline_id: u64) -> NifResult<Term> {
     match PIPELINES.remove(&pipeline_id) {
         Some(_) => Ok((atoms::ok()).encode(env)),
-        None => Err(Error::RaiseTerm(Box::new(format!(
-            "pipeline_free: invalid pipeline_id {}",
-            pipeline_id
-        )))),
+        None => Ok((
+            atoms::error(),
+            format!("pipeline_free: invalid pipeline_id {}", pipeline_id),
+        )
+            .encode(env)),
     }
 }
 
@@ -725,41 +729,4 @@ fn transcode_finish(env: Env, encoder: ResourceArc<media::Transcoder>) -> NifRes
     media::nif_transcode_finish(env, encoder)
 }
 
-rustler::init!(
-    "Elixir.ExCubecl.NIF",
-    [
-        // Device
-        device_info,
-        device_count,
-        // Buffers
-        buffer_new,
-        buffer_read,
-        buffer_size,
-        buffer_shape,
-        buffer_dtype,
-        // Kernels
-        kernel_run,
-        kernel_list,
-        // Async
-        submit,
-        poll,
-        wait,
-        // Pipelines
-        pipeline_new,
-        pipeline_add,
-        pipeline_run,
-        pipeline_free,
-        // Media I/O
-        media_open,
-        media_streams,
-        media_read_video_frame,
-        media_read_audio_samples,
-        media_close,
-        // Transcode
-        transcode_start,
-        transcode_write_video,
-        transcode_write_audio,
-        transcode_finish,
-    ],
-    load = on_load
-);
+rustler::init!("Elixir.ExCubecl.NIF", load = on_load);

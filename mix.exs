@@ -1,7 +1,7 @@
 defmodule ExCubecl.MixProject do
   use Mix.Project
 
-  @version "0.4.0"
+  @version "0.4.1"
   @source_url "https://github.com/ohhi-vn/ex_cubecl"
 
   def project do
@@ -112,7 +112,8 @@ defmodule ExCubecl.MixProject do
         "guides/08_video_processing.md",
         "guides/09_audio_processing.md",
         "guides/10_transcode.md",
-        "guides/11_realtime_pipeline.md"
+        "guides/11_realtime_pipeline.md",
+        "guides/12_video_merge_pip.md"
       ],
       groups_for_extras: [
         Guides: ~r/guides\/[0-9]+_.*\.md/,

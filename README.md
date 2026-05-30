@@ -12,7 +12,7 @@ It provides GPU buffer management, kernel execution, async command submission, a
 ┌─────────────────────────────────────────────┐
 │              Elixir / BEAM                   │
 │  ExCubecl.buffer(...)                       │
-│  ExCubecl.run_kernel(:blur, ...)            │
+│  ExCubecl.run_kernel("elementwise_add", ...) │
 │  ExCubecl.pipeline() |> pipeline_run()      │
 ├─────────────────────────────────────────────┤
 │           ExCubecl.NIF (Elixir)              │
@@ -44,7 +44,7 @@ Add `ex_cubecl` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:ex_cubecl, "~> 0.2.0"}
+    {:ex_cubecl, "~> 0.4.0"}
   ]
 end
 ```
