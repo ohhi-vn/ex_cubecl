@@ -13,6 +13,12 @@ defmodule ExCubecl.Filter do
       filtered = ExCubecl.Filter.apply(frame, :brightness_contrast, brightness: 0.1, contrast: 1.2)
       filtered = ExCubecl.Filter.apply(frame, :denoise, strength: 0.5)
 
+      # Chaining filters
+      ExCubecl.Filter.chain(frame, [
+        {:gaussian_blur, [radius: 3]},
+        {:sharpen, [strength: 1.0]}
+      ])
+
   ## Audio filters
 
       filtered = ExCubecl.Filter.apply(samples, :eq, bands: [{:high_pass, 80}, {:shelf_high, 8000, 3.0}])
@@ -127,8 +133,18 @@ defmodule ExCubecl.Filter do
   # ── Private ─────────────────────────────────────────────────
 
   defp apply_kernel(handle, kernel, params) do
-    kernel_str = Atom.to_string(kernel)
+    kernel_str = kernel_to_string(kernel)
     params_binary = :erlang.term_to_binary(Map.new(params))
     NIF.kernel_run(kernel_str, [handle], handle, params_binary)
   end
+
+  # Maps filter atom names to their underlying kernel names.
+  defp kernel_to_string(:normalize), do: "pcm_normalize"
+  defp kernel_to_string(:eq), do: "biquad_filter"
+  defp kernel_to_string(:compressor), do: "dynamics_compress"
+  defp kernel_to_string(:reverb), do: "fft_convolve"
+  defp kernel_to_string(:lut), do: "lut_apply"
+  defp kernel_to_string(:brightness_contrast), do: "brightness_contrast"
+  defp kernel_to_string(:denoise), do: "denoise"
+  defp kernel_to_string(kernel), do: Atom.to_string(kernel)
 end

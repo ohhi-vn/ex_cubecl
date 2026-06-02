@@ -70,16 +70,20 @@ impl DType {
 
 // ── Buffer resource ───────────────────────────────────────────
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Buffer {
-    pub data: Vec<u8>,
+    pub data: parking_lot::Mutex<Vec<u8>>,
     pub shape: Vec<usize>,
     pub dtype: DType,
 }
 
 impl Buffer {
     pub fn byte_size(&self) -> usize {
-        self.data.len()
+        self.data.lock().len()
+    }
+
+    pub fn data(&self) -> parking_lot::MutexGuard<'_, Vec<u8>> {
+        self.data.lock()
     }
 }
 
@@ -171,6 +175,20 @@ fn alloc_id(counter: &AtomicU64) -> u64 {
     counter.fetch_add(1, Ordering::SeqCst)
 }
 
+/// Drains finished thread handles from the pool, joins them, and keeps
+/// still-running handles. Called after each `submit` to prevent accumulation.
+fn join_finished_threads() {
+    let mut pool = THREAD_POOL.lock();
+    let drained: Vec<_> = pool.drain(..).collect();
+    for handle in drained {
+        if handle.is_finished() {
+            let _ = handle.join();
+        } else {
+            pool.push(handle);
+        }
+    }
+}
+
 // ── Available kernels (Phase 1 + Phase 2) ────────────────────
 
 const AVAILABLE_KERNELS: &[&str] = &[
@@ -200,6 +218,8 @@ const AVAILABLE_KERNELS: &[&str] = &[
     "lut_apply",
     "chroma_key",
     "sharpen",
+    "brightness_contrast",
+    "denoise",
     // Phase 2 — audio
     "pcm_mix",
     "pcm_normalize",
@@ -330,7 +350,7 @@ fn buffer_new<'a>(env: Env<'a>, data: Term, shape: Term, dtype_str: Term) -> Nif
     }
 
     let buffer = Buffer {
-        data: data_binary.as_slice().to_vec(),
+        data: parking_lot::Mutex::new(data_binary.as_slice().to_vec()),
         shape: shape_vec,
         dtype,
     };
@@ -341,15 +361,16 @@ fn buffer_new<'a>(env: Env<'a>, data: Term, shape: Term, dtype_str: Term) -> Nif
 
 #[rustler::nif]
 fn buffer_read<'a>(env: Env<'a>, buffer: ResourceArc<Buffer>) -> NifResult<Term<'a>> {
-    let mut out = rustler::OwnedBinary::new(buffer.data.len())
+    let data = buffer.data();
+    let mut out = rustler::OwnedBinary::new(data.len())
         .ok_or_else(|| Error::RaiseTerm(Box::new("buffer_read: allocation failed")))?;
-    out.as_mut_slice().copy_from_slice(&buffer.data);
+    out.as_mut_slice().copy_from_slice(&data);
     Ok((atoms::ok(), out.release(env)).encode(env))
 }
 
 #[rustler::nif]
 fn buffer_size(env: Env, buffer: ResourceArc<Buffer>) -> NifResult<Term> {
-    Ok((atoms::ok(), buffer.byte_size()).encode(env))
+    Ok((atoms::ok(), buffer.data().len()).encode(env))
 }
 
 #[rustler::nif]
@@ -384,6 +405,22 @@ fn kernel_run<'a>(
             .encode(env));
     }
 
+    // Execute the kernel on the CPU (simulating GPU execution).
+    // TODO: Replace Phase 2 kernels (video/audio) with CubeCL GPU dispatch.
+    match name_str.as_str() {
+        "elementwise_add" => kernel_elementwise_add(&input_resources, &output)?,
+        "elementwise_mul" => kernel_elementwise_mul(&input_resources, &output)?,
+        "elementwise_sub" => kernel_elementwise_sub(&input_resources, &output)?,
+        "elementwise_div" => kernel_elementwise_div(&input_resources, &output)?,
+        "relu" => kernel_relu(&input_resources, &output)?,
+        "sigmoid" => kernel_sigmoid(&input_resources, &output)?,
+        "tanh" => kernel_tanh(&input_resources, &output)?,
+        _ => {
+            // Phase 2 kernels (video/audio/compute): stub no-ops until CubeCL is integrated.
+            let _ = (input_resources, output);
+        }
+    }
+
     let cmd_id = alloc_id(&NEXT_COMMAND_ID);
     COMMANDS.insert(
         cmd_id,
@@ -393,10 +430,120 @@ fn kernel_run<'a>(
         },
     );
 
-    // Phase 2 stub: no-op. Real implementation dispatches to CubeCL GPU kernels.
-    let _ = (input_resources, output, name_str);
-
     Ok((atoms::ok(), cmd_id).encode(env))
+}
+
+// ── CPU-side kernel implementations (simulating GPU) ────────
+
+fn kernel_elementwise_add(
+    inputs: &[ResourceArc<Buffer>],
+    output: &ResourceArc<Buffer>,
+) -> NifResult<()> {
+    if inputs.len() < 2 {
+        return Err(Error::RaiseTerm(Box::new(
+            "elementwise_add: expected 2 inputs",
+        )));
+    }
+    let a = inputs[0].data();
+    let b = inputs[1].data();
+    let mut out = output.data();
+    for i in (0..a.len()).step_by(4) {
+        let va = f32::from_ne_bytes(a[i..i + 4].try_into().unwrap());
+        let vb = f32::from_ne_bytes(b[i..i + 4].try_into().unwrap());
+        out[i..i + 4].copy_from_slice(&(va + vb).to_ne_bytes());
+    }
+    Ok(())
+}
+
+fn kernel_elementwise_mul(
+    inputs: &[ResourceArc<Buffer>],
+    output: &ResourceArc<Buffer>,
+) -> NifResult<()> {
+    if inputs.len() < 2 {
+        return Err(Error::RaiseTerm(Box::new(
+            "elementwise_mul: expected 2 inputs",
+        )));
+    }
+    let a = inputs[0].data();
+    let b = inputs[1].data();
+    let mut out = output.data();
+    for i in (0..a.len()).step_by(4) {
+        let va = f32::from_ne_bytes(a[i..i + 4].try_into().unwrap());
+        let vb = f32::from_ne_bytes(b[i..i + 4].try_into().unwrap());
+        out[i..i + 4].copy_from_slice(&(va * vb).to_ne_bytes());
+    }
+    Ok(())
+}
+
+fn kernel_elementwise_sub(
+    inputs: &[ResourceArc<Buffer>],
+    output: &ResourceArc<Buffer>,
+) -> NifResult<()> {
+    if inputs.len() < 2 {
+        return Err(Error::RaiseTerm(Box::new(
+            "elementwise_sub: expected 2 inputs",
+        )));
+    }
+    let a = inputs[0].data();
+    let b = inputs[1].data();
+    let mut out = output.data();
+    for i in (0..a.len()).step_by(4) {
+        let va = f32::from_ne_bytes(a[i..i + 4].try_into().unwrap());
+        let vb = f32::from_ne_bytes(b[i..i + 4].try_into().unwrap());
+        out[i..i + 4].copy_from_slice(&(va - vb).to_ne_bytes());
+    }
+    Ok(())
+}
+
+fn kernel_elementwise_div(
+    inputs: &[ResourceArc<Buffer>],
+    output: &ResourceArc<Buffer>,
+) -> NifResult<()> {
+    if inputs.len() < 2 {
+        return Err(Error::RaiseTerm(Box::new(
+            "elementwise_div: expected 2 inputs",
+        )));
+    }
+    let a = inputs[0].data();
+    let b = inputs[1].data();
+    let mut out = output.data();
+    for i in (0..a.len()).step_by(4) {
+        let va = f32::from_ne_bytes(a[i..i + 4].try_into().unwrap());
+        let vb = f32::from_ne_bytes(b[i..i + 4].try_into().unwrap());
+        out[i..i + 4].copy_from_slice(&(va / vb).to_ne_bytes());
+    }
+    Ok(())
+}
+
+fn kernel_relu(inputs: &[ResourceArc<Buffer>], output: &ResourceArc<Buffer>) -> NifResult<()> {
+    let a = inputs[0].data();
+    let mut out = output.data();
+    for i in (0..a.len()).step_by(4) {
+        let v = f32::from_ne_bytes(a[i..i + 4].try_into().unwrap());
+        out[i..i + 4].copy_from_slice(&v.max(0.0).to_ne_bytes());
+    }
+    Ok(())
+}
+
+fn kernel_sigmoid(inputs: &[ResourceArc<Buffer>], output: &ResourceArc<Buffer>) -> NifResult<()> {
+    let a = inputs[0].data();
+    let mut out = output.data();
+    for i in (0..a.len()).step_by(4) {
+        let v = f32::from_ne_bytes(a[i..i + 4].try_into().unwrap());
+        let s = 1.0 / (1.0 + (-v).exp());
+        out[i..i + 4].copy_from_slice(&s.to_ne_bytes());
+    }
+    Ok(())
+}
+
+fn kernel_tanh(inputs: &[ResourceArc<Buffer>], output: &ResourceArc<Buffer>) -> NifResult<()> {
+    let a = inputs[0].data();
+    let mut out = output.data();
+    for i in (0..a.len()).step_by(4) {
+        let v = f32::from_ne_bytes(a[i..i + 4].try_into().unwrap());
+        out[i..i + 4].copy_from_slice(&v.tanh().to_ne_bytes());
+    }
+    Ok(())
 }
 
 #[rustler::nif]
@@ -420,26 +567,26 @@ fn submit<'a>(env: Env<'a>, command_json: Term) -> NifResult<Term<'a>> {
         },
     );
 
-    let cmd_id_clone = cmd_id;
     let handle = thread::spawn(move || {
         COMMANDS.insert(
-            cmd_id_clone,
+            cmd_id,
             Command {
-                id: cmd_id_clone,
+                id: cmd_id,
                 status: CommandStatus::Running,
             },
         );
         thread::sleep(std::time::Duration::from_millis(1));
         COMMANDS.insert(
-            cmd_id_clone,
+            cmd_id,
             Command {
-                id: cmd_id_clone,
+                id: cmd_id,
                 status: CommandStatus::Completed,
             },
         );
     });
 
     THREAD_POOL.lock().push(handle);
+    join_finished_threads();
 
     Ok((atoms::ok(), cmd_id).encode(env))
 }
@@ -514,7 +661,7 @@ fn pipeline_add<'a>(
 ) -> NifResult<Term<'a>> {
     let name_str: String = name.decode()?;
     let input_resources: Vec<ResourceArc<Buffer>> = inputs.decode()?;
-    let _params_binary: rustler::Binary = params.decode()?;
+    let params_binary: rustler::Binary = params.decode()?;
 
     match PIPELINES.get_mut(&pipeline_id) {
         Some(mut pipeline) => {
@@ -522,7 +669,7 @@ fn pipeline_add<'a>(
                 name: name_str,
                 inputs: input_resources,
                 output,
-                params: Vec::new(),
+                params: params_binary.as_slice().to_vec(),
             });
             Ok((atoms::ok()).encode(env))
         }

@@ -16,7 +16,7 @@ IO.puts("Image buffer: shape=#{inspect(shape)}, size=#{size} bytes")
 # Create a padded version (7x7 with 1-pixel border)
 {:ok, padded} = ExCubecl.buffer(List.duplicate(0.0, 49), [7, 7], :f32)
 {:ok, shape_p} = ExCubecl.shape(padded)
-IO.puts("Padded buffer: shape=#{inspect(shape_p)}")
+IO.puts("Padded buffer: shape=#{inspect(shape_p, charlists: :as_lists)}")
 
 # Create output buffer for convolution result
 {:ok, output} = ExCubecl.buffer(List.duplicate(0.0, 25), [5, 5], :f32)
@@ -27,9 +27,10 @@ IO.puts("Output buffer: shape=#{inspect(shape_o)}")
 {:ok, _cmd} = ExCubecl.run_kernel("gaussian_blur", [padded], output)
 IO.puts("Blur kernel executed")
 
-# Run elementwise operation
+# Run elementwise operation (add image + bias, both 5x5)
+{:ok, bias} = ExCubecl.buffer(List.duplicate(1.0, 25), [5, 5], :f32)
 {:ok, edges} = ExCubecl.buffer(List.duplicate(0.0, 25), [5, 5], :f32)
-{:ok, _cmd2} = ExCubecl.run_kernel("elementwise_add", [padded], edges)
+{:ok, _cmd2} = ExCubecl.run_kernel("elementwise_add", [image, bias], edges)
 IO.puts("Elementwise add kernel executed")
 
 # Read back results

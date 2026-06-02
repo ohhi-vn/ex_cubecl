@@ -180,15 +180,19 @@ pub fn nif_media_read_video_frame<'a>(
     _source: ResourceArc<MediaSource>,
 ) -> NifResult<Term<'a>> {
     // Phase 2 stub: return a synthetic GPU buffer representing a video frame.
-    // TODO: Replace with ffmpeg-next decode → GPU buffer upload.
-    // Frame format: 1920×1080 YUV420p = 1920*1080*1.5 = 3,110,400 bytes
+    // TODO: Replace with ffmpeg-next decode -> GPU buffer upload.
+    // Frame format: 1920x1080 YUV420p = 1920*1080*1.5 = 3,110,400 bytes
+    // Fill with a synthetic pattern (gray Y=128, neutral UV=128) for visibility.
     let frame_size = 1920 * 1080 * 3 / 2;
-    let data = vec![0u8; frame_size];
+    let y_size = 1920 * 1080;
+    let mut data = Vec::with_capacity(frame_size);
+    data.resize(y_size, 128u8); // Y plane: gray
+    data.resize(frame_size, 128u8); // UV plane: neutral
 
     use crate::Buffer;
     use crate::DType;
     let buffer = Buffer {
-        data,
+        data: parking_lot::Mutex::new(data),
         shape: vec![frame_size],
         dtype: DType::U8,
     };
@@ -229,8 +233,9 @@ pub fn nif_media_read_audio_samples<'a>(
     _source: ResourceArc<MediaSource>,
 ) -> NifResult<Term<'a>> {
     // Phase 2 stub: return a synthetic GPU buffer representing audio samples.
-    // TODO: Replace with ffmpeg-next decode → GPU buffer upload.
-    // Format: 1024 frames × 2 channels × f32 = 1024*2*4 = 8192 bytes
+    // TODO: Replace with ffmpeg-next decode -> GPU buffer upload.
+    // Format: 1024 frames x 2 channels x f32 = 1024*2*4 = 8192 bytes
+    // Fill with silence (0.0 f32 = 0x00 bytes) as expected for audio.
     let sample_frames = 1024usize;
     let channels = 2usize;
     let data = vec![0u8; sample_frames * channels * 4];
@@ -238,7 +243,7 @@ pub fn nif_media_read_audio_samples<'a>(
     use crate::Buffer;
     use crate::DType;
     let buffer = Buffer {
-        data,
+        data: parking_lot::Mutex::new(data),
         shape: vec![sample_frames * channels],
         dtype: DType::F32,
     };

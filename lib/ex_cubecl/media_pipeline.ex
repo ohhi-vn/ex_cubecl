@@ -12,7 +12,7 @@ defmodule ExCubecl.MediaPipeline do
 
         def handle_frame(frame, state) do
           frame
-          |> ExCubecl.Filter.apply(:beauty_filter, strength: 0.5)
+          |> ExCubecl.Filter.apply(:denoise, strength: 0.5)
           |> ExCubecl.Video.overlay(state.logo, x: 10, y: 10)
           |> ExCubecl.Transcode.write_frame(state.encoder)
           {:ok, state}

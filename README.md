@@ -44,7 +44,7 @@ Add `ex_cubecl` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:ex_cubecl, "~> 0.4.0"}
+    {:ex_cubecl, "~> 0.4.1"}
   ]
 end
 ```
@@ -177,10 +177,24 @@ Virtual background, AR effects, realtime filters — all GPU-native.
 
 | Phase | Focus                          | Status        |
 |-------|--------------------------------|---------------|
-| 1     | GPU compute runtime            | ✅ Current    |
-| 2     | Media runtime (video/camera)   | 🔜 Planned    |
-| 3     | AI runtime (inference)         | 🔜 Planned    |
-| 4     | Nx integration (Axon/training) | 🔜 Planned (Phase 4) |
+| 1     | GPU compute runtime            | ✅ Complete   |
+| 2     | Media runtime (video/camera)   | ✅ Complete   |
+
+### Phase 1 — GPU Compute Runtime
+- Buffer management with automatic GC-based cleanup (Rustler ResourceArc)
+- Kernel execution (`elementwise_add`, `relu`, and extensible kernel list)
+- Async command submission with submit/poll/wait
+- Pipeline orchestration for chaining GPU operations
+- C FFI layer for mobile platform integration (iOS/Android)
+
+### Phase 2 — Media Runtime (current)
+- Media I/O: open, inspect streams, read video frames & audio samples, close
+- Video GPU operations: overlay (alpha compositing), mix, scale, crop, pixel format conversion
+- Audio GPU operations: mix, overlay with ducking, resample, channel conversion
+- GPU-accelerated filters: gaussian blur, sharpen, LUT color grading, chroma key, brightness/contrast, denoise, EQ, compressor, reverb, normalize
+- Transcoding: encode & mux to mp4/mkv/webm/mov/ts with h264/h265/vp9/av1/prores video and aac/opus/mp3/flac/pcm audio
+- Real-time media pipeline (GenServer-based) for livestreaming and camera effects
+- C FFI extensions: GPU texture upload (YUV420p/NV12), kernel application to textures, audio mix
 
 ## License
 

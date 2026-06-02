@@ -11,5 +11,5 @@
 /// Placeholder: returns the runtime version string.
 #[no_mangle]
 pub unsafe extern "C" fn ex_cubecl_version() -> u32 {
-    0x0003_0000 // 0.3.0
+    0x0004_0001 // 0.4.1
 }

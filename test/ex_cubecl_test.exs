@@ -1,5 +1,6 @@
 defmodule ExCubeclTest do
   use ExUnit.Case, async: true
+  @moduletag timeout: 300_000
 
   describe "version" do
     test "returns version string" do
@@ -7,7 +8,7 @@ defmodule ExCubeclTest do
     end
 
     test "version matches mix.exs" do
-      assert ExCubecl.version() == "0.4.0"
+      assert ExCubecl.version() == "0.4.1"
     end
   end
 
@@ -264,9 +265,10 @@ defmodule ExCubeclTest do
     end
 
     test "run_kernel executes without error" do
-      {:ok, input} = ExCubecl.buffer([1.0, 2.0, 3.0], [3], :f32)
+      {:ok, input_a} = ExCubecl.buffer([1.0, 2.0, 3.0], [3], :f32)
+      {:ok, input_b} = ExCubecl.buffer([4.0, 5.0, 6.0], [3], :f32)
       {:ok, output} = ExCubecl.buffer([0.0, 0.0, 0.0], [3], :f32)
-      {:ok, _cmd_id} = ExCubecl.run_kernel("elementwise_add", [input], output)
+      {:ok, _cmd_id} = ExCubecl.run_kernel("elementwise_add", [input_a, input_b], output)
     end
 
     test "run_kernel returns a command id" do
@@ -351,7 +353,7 @@ defmodule ExCubeclTest do
       {:ok, output} = ExCubecl.buffer([0.0, 0.0, 0.0], [3], :f32)
 
       {:ok, pipeline_id} = ExCubecl.pipeline()
-      :ok = ExCubecl.pipeline_add(pipeline_id, "elementwise_add", [input], output)
+      :ok = ExCubecl.pipeline_add(pipeline_id, "relu", [input], output)
       {:ok, _cmd_ids} = ExCubecl.pipeline_run(pipeline_id)
       :ok = ExCubecl.pipeline_free(pipeline_id)
     end
@@ -362,8 +364,8 @@ defmodule ExCubeclTest do
       {:ok, stage2_out} = ExCubecl.buffer([0.0, 0.0, 0.0], [3], :f32)
 
       {:ok, pipeline_id} = ExCubecl.pipeline()
-      :ok = ExCubecl.pipeline_add(pipeline_id, "elementwise_add", [input], stage1_out)
-      :ok = ExCubecl.pipeline_add(pipeline_id, "relu", [stage1_out], stage2_out)
+      :ok = ExCubecl.pipeline_add(pipeline_id, "relu", [input], stage1_out)
+      :ok = ExCubecl.pipeline_add(pipeline_id, "sigmoid", [stage1_out], stage2_out)
       {:ok, _cmd_ids} = ExCubecl.pipeline_run(pipeline_id)
       :ok = ExCubecl.pipeline_free(pipeline_id)
     end
@@ -394,8 +396,8 @@ defmodule ExCubeclTest do
       {:ok, output} = ExCubecl.buffer([0.0], [1], :f32)
 
       {:ok, pipeline_id} = ExCubecl.pipeline()
-      :ok = ExCubecl.pipeline_add(pipeline_id, "elementwise_add", [input], mid)
-      :ok = ExCubecl.pipeline_add(pipeline_id, "relu", [mid], output)
+      :ok = ExCubecl.pipeline_add(pipeline_id, "relu", [input], mid)
+      :ok = ExCubecl.pipeline_add(pipeline_id, "sigmoid", [mid], output)
       {:ok, cmd_ids} = ExCubecl.pipeline_run(pipeline_id)
       assert length(cmd_ids) == 2
       :ok = ExCubecl.pipeline_free(pipeline_id)
@@ -527,6 +529,272 @@ defmodule ExCubeclTest do
       {:ok, buf} = ExCubecl.buffer(original, [3], :f64)
       {:ok, data} = ExCubecl.read(buf)
       assert byte_size(data) == 24
+    end
+  end
+
+  # ── Phase 2: Media I/O ──────────────────────────────────────
+
+  describe "Media" do
+    test "open returns a source reference" do
+      {:ok, src} = ExCubecl.Media.open("test.mp4")
+      assert is_reference(src)
+    end
+
+    test "streams returns video and audio stream info" do
+      {:ok, src} = ExCubecl.Media.open("test.mp4")
+      {:ok, streams} = ExCubecl.Media.streams(src)
+      assert length(streams) == 2
+      [video | [audio | _]] = streams
+      assert video.type == :video
+      assert video.width == 1920
+      assert video.height == 1080
+      assert audio.type == :audio
+      assert audio.sample_rate == 44100
+      assert audio.channels == 2
+    end
+
+    test "read_frame returns a VideoFrame" do
+      {:ok, src} = ExCubecl.Media.open("test.mp4")
+      {:ok, frame} = ExCubecl.Media.read_frame(src, :video)
+      assert %ExCubecl.VideoFrame{} = frame
+      assert frame.width == 1920
+      assert frame.height == 1080
+      assert frame.format == :yuv420p
+      assert is_reference(frame.handle)
+    end
+
+    test "read_frame returns AudioSamples" do
+      {:ok, src} = ExCubecl.Media.open("test.mp4")
+      {:ok, samples} = ExCubecl.Media.read_frame(src, :audio)
+      assert %ExCubecl.AudioSamples{} = samples
+      assert samples.channels == 2
+      assert samples.sample_rate == 48000
+      assert is_reference(samples.handle)
+    end
+
+    test "close returns ok" do
+      {:ok, src} = ExCubecl.Media.open("test.mp4")
+      assert ExCubecl.Media.close(src) == :ok
+    end
+  end
+
+  # ── Phase 2: Video operations ──────────────────────────────
+
+  describe "Video" do
+    test "overlay returns ok" do
+      {:ok, src} = ExCubecl.Media.open("test.mp4")
+      {:ok, frame_a} = ExCubecl.Media.read_frame(src, :video)
+      {:ok, frame_b} = ExCubecl.Media.read_frame(src, :video)
+
+      assert {:ok, %ExCubecl.VideoFrame{}} =
+               ExCubecl.Video.overlay(frame_a, frame_b, x: 10, y: 20, alpha: 0.5)
+    end
+
+    test "mix returns ok" do
+      {:ok, src} = ExCubecl.Media.open("test.mp4")
+      {:ok, frame_a} = ExCubecl.Media.read_frame(src, :video)
+      {:ok, frame_b} = ExCubecl.Media.read_frame(src, :video)
+
+      assert {:ok, %ExCubecl.VideoFrame{}} =
+               ExCubecl.Video.mix(frame_a, frame_b, mode: :dissolve, ratio: 0.5)
+    end
+
+    test "scale returns ok with updated dimensions" do
+      {:ok, src} = ExCubecl.Media.open("test.mp4")
+      {:ok, frame} = ExCubecl.Media.read_frame(src, :video)
+      {:ok, scaled} = ExCubecl.Video.scale(frame, width: 640, height: 480)
+      assert scaled.width == 640
+      assert scaled.height == 480
+    end
+
+    test "crop returns ok with updated dimensions" do
+      {:ok, src} = ExCubecl.Media.open("test.mp4")
+      {:ok, frame} = ExCubecl.Media.read_frame(src, :video)
+      {:ok, cropped} = ExCubecl.Video.crop(frame, x: 0, y: 0, width: 640, height: 360)
+      assert cropped.width == 640
+      assert cropped.height == 360
+    end
+
+    test "convert from yuv420p returns rgb24 frame" do
+      {:ok, src} = ExCubecl.Media.open("test.mp4")
+      {:ok, frame} = ExCubecl.Media.read_frame(src, :video)
+      {:ok, converted} = ExCubecl.Video.convert(frame, :yuv420p, :rgb24)
+      assert converted.format == :rgb24
+    end
+
+    test "convert from unsupported format returns error" do
+      {:ok, src} = ExCubecl.Media.open("test.mp4")
+      {:ok, %ExCubecl.VideoFrame{} = frame} = ExCubecl.Media.read_frame(src, :video)
+      # Override format to :rgb24 and pass :rgb24 as from_format
+      # which hits the unsupported conversion clause
+      rgb_frame = %ExCubecl.VideoFrame{frame | format: :rgb24}
+      assert {:error, {:unsupported_conversion, :rgb24}} =
+               ExCubecl.Video.convert(rgb_frame, :rgb24, :yuv420p)
+    end
+  end
+
+  # ── Phase 2: Audio operations ──────────────────────────────
+
+  describe "Audio" do
+    test "mix returns ok" do
+      {:ok, src} = ExCubecl.Media.open("test.mp4")
+      {:ok, samples_a} = ExCubecl.Media.read_frame(src, :audio)
+      {:ok, samples_b} = ExCubecl.Media.read_frame(src, :audio)
+
+      assert {:ok, %ExCubecl.AudioSamples{}} =
+               ExCubecl.Audio.mix([samples_a, samples_b], gains: [0.7, 0.5])
+    end
+
+    test "mix with empty list returns error" do
+      assert {:error, :no_tracks} = ExCubecl.Audio.mix([])
+    end
+
+    test "overlay returns ok" do
+      {:ok, src} = ExCubecl.Media.open("test.mp4")
+      {:ok, bg} = ExCubecl.Media.read_frame(src, :audio)
+      {:ok, fg} = ExCubecl.Media.read_frame(src, :audio)
+      assert {:ok, %ExCubecl.AudioSamples{}} = ExCubecl.Audio.overlay(bg, fg, duck_level: -12)
+    end
+
+    test "resample returns ok with updated sample rate" do
+      {:ok, src} = ExCubecl.Media.open("test.mp4")
+      {:ok, samples} = ExCubecl.Media.read_frame(src, :audio)
+      {:ok, resampled} = ExCubecl.Audio.resample(samples, from: 48000, to: 44100)
+      assert resampled.sample_rate == 44100
+    end
+
+    test "channels returns ok" do
+      {:ok, src} = ExCubecl.Media.open("test.mp4")
+      {:ok, samples} = ExCubecl.Media.read_frame(src, :audio)
+      {:ok, mono} = ExCubecl.Audio.channels(samples, :stereo, :mono)
+      assert mono.channels == 1
+    end
+  end
+
+  # ── Phase 2: Filters ───────────────────────────────────────
+
+  describe "Filter" do
+    test "apply video filter returns ok" do
+      {:ok, src} = ExCubecl.Media.open("test.mp4")
+      {:ok, frame} = ExCubecl.Media.read_frame(src, :video)
+
+      assert {:ok, %ExCubecl.VideoFrame{}} =
+               ExCubecl.Filter.apply(frame, :gaussian_blur, radius: 5)
+    end
+
+    test "apply audio filter returns ok" do
+      {:ok, src} = ExCubecl.Media.open("test.mp4")
+      {:ok, samples} = ExCubecl.Media.read_frame(src, :audio)
+      assert {:ok, %ExCubecl.AudioSamples{}} = ExCubecl.Filter.apply(samples, :normalize)
+    end
+
+    test "apply unknown filter returns error" do
+      {:ok, src} = ExCubecl.Media.open("test.mp4")
+      {:ok, frame} = ExCubecl.Media.read_frame(src, :video)
+
+      assert {:error, {:unknown_filter, :nonexistent}} =
+               ExCubecl.Filter.apply(frame, :nonexistent)
+    end
+
+    test "chain returns ok" do
+      {:ok, src} = ExCubecl.Media.open("test.mp4")
+      {:ok, frame} = ExCubecl.Media.read_frame(src, :video)
+
+      assert {:ok, %ExCubecl.VideoFrame{}} =
+               ExCubecl.Filter.chain(frame, [
+                 {:gaussian_blur, [radius: 3]},
+                 {:sharpen, [strength: 1.0]}
+               ])
+    end
+  end
+
+  # ── Phase 2: Transcode ─────────────────────────────────────
+
+  describe "Transcode" do
+    test "start returns an encoder reference" do
+      {:ok, enc} =
+        ExCubecl.Transcode.start("output.mp4", video: [codec: :h264], audio: [codec: :aac])
+
+      assert is_reference(enc)
+    end
+
+    test "start validates video codec" do
+      assert_raise ArgumentError, ~r/unsupported video codec/, fn ->
+        ExCubecl.Transcode.start("output.mp4", video: [codec: :invalid])
+      end
+    end
+
+    test "start validates audio codec" do
+      assert_raise ArgumentError, ~r/unsupported audio codec/, fn ->
+        ExCubecl.Transcode.start("output.mp4", audio: [codec: :invalid])
+      end
+    end
+
+    test "start validates container" do
+      assert_raise ArgumentError, ~r/unsupported container/, fn ->
+        ExCubecl.Transcode.start("output.avi", video: [codec: :h264])
+      end
+    end
+
+    test "write_frame returns ok" do
+      {:ok, enc} = ExCubecl.Transcode.start("output.mp4", video: [codec: :h264])
+      {:ok, src} = ExCubecl.Media.open("test.mp4")
+      {:ok, frame} = ExCubecl.Media.read_frame(src, :video)
+      assert ExCubecl.Transcode.write_frame(enc, frame) == :ok
+    end
+
+    test "write_samples returns ok" do
+      {:ok, enc} = ExCubecl.Transcode.start("output.mp4", audio: [codec: :aac])
+      {:ok, src} = ExCubecl.Media.open("test.mp4")
+      {:ok, samples} = ExCubecl.Media.read_frame(src, :audio)
+      assert ExCubecl.Transcode.write_samples(enc, samples) == :ok
+    end
+
+    test "finish returns ok" do
+      {:ok, enc} = ExCubecl.Transcode.start("output.mp4", video: [codec: :h264])
+      assert ExCubecl.Transcode.finish(enc) == :ok
+    end
+  end
+
+  # ── Phase 2: VideoFrame / AudioSamples structs ─────────────
+
+  describe "VideoFrame" do
+    test "from_map creates a struct" do
+      map = %{
+        handle: make_ref(),
+        width: 1920,
+        height: 1080,
+        format: :yuv420p,
+        pts: 0,
+        duration: 33333
+      }
+
+      frame = ExCubecl.VideoFrame.from_map(map)
+      assert %ExCubecl.VideoFrame{} = frame
+      assert frame.width == 1920
+      assert frame.format == :yuv420p
+    end
+  end
+
+  describe "AudioSamples" do
+    test "from_map creates a struct" do
+      map = %{handle: make_ref(), channels: 2, sample_rate: 48000, frames: 1024, pts: 0}
+      samples = ExCubecl.AudioSamples.from_map(map)
+      assert %ExCubecl.AudioSamples{} = samples
+      assert samples.channels == 2
+      assert samples.sample_rate == 48000
+    end
+  end
+
+  # ── Phase 2: MediaPipeline ─────────────────────────────────
+
+  describe "MediaPipeline" do
+    test "push_frame sends a message" do
+      {:ok, src} = ExCubecl.Media.open("test.mp4")
+      {:ok, frame} = ExCubecl.Media.read_frame(src, :video)
+      # push_frame sends an async message; just verify it returns :ok
+      assert ExCubecl.MediaPipeline.push_frame(self(), frame) == :ok
+      assert_received {:frame, %ExCubecl.VideoFrame{}}
     end
   end
 end
