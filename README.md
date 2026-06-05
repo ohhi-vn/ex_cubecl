@@ -145,6 +145,36 @@ Java_com_example_excubecl_ExCubeclBuffer_create(
 }
 ```
 
+### Phase 2 — Video Texture & Audio Mix (C FFI)
+
+```c
+#include "ex_cubecl.h"
+
+// Upload YUV420p camera frame to GPU texture
+uint8_t y_plane[1920*1080];
+uint8_t uv_plane[1920*1080/2];
+ex_cubecl_texture_handle_t tex = ex_cubecl_texture_from_yuv(
+    y_plane, uv_plane, 1920, 1080
+);
+
+// Apply gaussian blur filter
+ex_cubecl_texture_handle_t blurred = ex_cubecl_apply_kernel(
+    tex, "gaussian_blur", NULL, 0
+);
+
+// Mix two audio tracks with gain
+float gains[] = {0.7f, 0.5f};
+ex_cubecl_buffer_handle_t tracks[] = {track_a, track_b};
+ex_cubecl_buffer_handle_t mixed = ex_cubecl_audio_mix(
+    tracks, gains, 2, 48000
+);
+
+// Cleanup
+ex_cubecl_texture_free(tex);
+ex_cubecl_texture_free(blurred);
+ex_cubecl_buffer_free(mixed);
+```
+
 See `native/ex_cubecl_nif/include/ex_cubecl.h` for the full API reference.
 
 ## Use Cases
@@ -188,13 +218,13 @@ Virtual background, AR effects, realtime filters — all GPU-native.
 - C FFI layer for mobile platform integration (iOS/Android)
 
 ### Phase 2 — Media Runtime (current)
-- Media I/O: open, inspect streams, read video frames & audio samples, close
-- Video GPU operations: overlay (alpha compositing), mix, scale, crop, pixel format conversion
-- Audio GPU operations: mix, overlay with ducking, resample, channel conversion
-- GPU-accelerated filters: gaussian blur, sharpen, LUT color grading, chroma key, brightness/contrast, denoise, EQ, compressor, reverb, normalize
-- Transcoding: encode & mux to mp4/mkv/webm/mov/ts with h264/h265/vp9/av1/prores video and aac/opus/mp3/flac/pcm audio
-- Real-time media pipeline (GenServer-based) for livestreaming and camera effects
-- C FFI extensions: GPU texture upload (YUV420p/NV12), kernel application to textures, audio mix
+- Media I/O: open, inspect streams, read video frames & audio samples, close — CPU-side implementation with synthetic data for testing
+- Video GPU operations: overlay (alpha compositing), mix (dissolve/add/multiply), scale, crop, pixel format conversion (YUV420p→RGB24) — all CPU-side implementations
+- Audio GPU operations: mix (multi-track with gain), overlay with ducking, resample (linear interpolation), channel conversion — all CPU-side implementations
+- GPU-accelerated filters: gaussian blur, sharpen, LUT color grading, chroma key, brightness/contrast, denoise, EQ (biquad), compressor, reverb (delay-based), normalize — all CPU-side implementations
+- Transcoding: encode & mux to mp4/mkv/webm/mov/ts with h264/h265/vp9/av1/prores video and aac/opus/mp3/flac/pcm audio — API stubs with validation
+- Real-time media pipeline (GenServer-based) for livestreaming and camera effects — behaviour with `__using__` macro
+- C FFI extensions: GPU texture upload (YUV420p/NV12), kernel application to textures, audio mix — full C header implementation with buffer management, kernel dispatch, and error handling
 
 ## License
 

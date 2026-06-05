@@ -25,3 +25,4 @@ ex_cubecl-*.tar
 .expert
 .ruff_cache
 target
+.DS_Store

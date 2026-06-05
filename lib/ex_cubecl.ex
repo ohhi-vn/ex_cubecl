@@ -96,11 +96,19 @@ defmodule ExCubecl do
 
       {:ok, buf} = ExCubecl.buffer([1.0, 2.0, 3.0], [3], :f32)
   """
-  @spec buffer(list(), [non_neg_integer()], atom()) :: {:ok, reference()} | {:error, term()}
-  def buffer(data, shape, type \\ :f32) when is_list(data) and is_list(shape) do
+  @spec buffer(list() | binary(), [non_neg_integer()], atom()) ::
+          {:ok, reference()} | {:error, term()}
+  def buffer(data, shape, type \\ :f32)
+
+  def buffer(data, shape, type) when is_list(data) and is_list(shape) do
     dtype_str = dtype_to_string(type)
     binary = list_to_binary(data, dtype_str)
     NIF.buffer_new(binary, shape, dtype_str)
+  end
+
+  def buffer(data, shape, type) when is_binary(data) and is_list(shape) do
+    dtype_str = dtype_to_string(type)
+    NIF.buffer_new(data, shape, dtype_str)
   end
 
   @doc """
@@ -108,11 +116,13 @@ defmodule ExCubecl do
 
   See `buffer/3` for parameters.
   """
-  @spec buffer!(list(), [non_neg_integer()], atom()) :: reference()
+  @spec buffer!(list() | binary(), [non_neg_integer()], atom()) :: reference()
   def buffer!(data, shape, type \\ :f32) do
     dtype_str = dtype_to_string(type)
 
-    case NIF.buffer_new(list_to_binary(data, dtype_str), shape, dtype_str) do
+    binary = if is_list(data), do: list_to_binary(data, dtype_str), else: data
+
+    case NIF.buffer_new(binary, shape, dtype_str) do
       {:ok, buf} -> buf
       {:error, reason} -> raise "ExCubecl.buffer!/3 failed: #{inspect(reason)}"
     end
@@ -159,11 +169,10 @@ defmodule ExCubecl do
     * `output` — output buffer reference
     * `params` — optional map of kernel parameters (default `%{}`)
   """
-  @spec run_kernel(String.t(), [reference()], reference(), map()) ::
+  @spec run_kernel(String.t(), [reference()], reference(), [{atom(), term()}]) ::
           {:ok, non_neg_integer()} | {:error, term()}
   def run_kernel(name, inputs, output, params \\ %{}) when is_binary(name) do
-    params_binary = :erlang.term_to_binary(params)
-    NIF.kernel_run(name, inputs, output, params_binary)
+    NIF.kernel_run(name, inputs, output, params)
   end
 
   @doc "Returns the list of available kernel names."
@@ -215,12 +224,11 @@ defmodule ExCubecl do
       {:ok, pipeline} = ExCubecl.pipeline()
       ExCubecl.pipeline_add(pipeline, "elementwise_add", [buf_a, buf_b], buf_out)
   """
-  @spec pipeline_add(non_neg_integer(), String.t(), [reference()], reference(), map()) ::
+  @spec pipeline_add(non_neg_integer(), String.t(), [reference()], reference(), [{atom(), term()}]) ::
           :ok | {:error, term()}
   def pipeline_add(pipeline_id, kernel, inputs, output, params \\ %{})
       when is_integer(pipeline_id) and is_binary(kernel) do
-    params_binary = :erlang.term_to_binary(params)
-    NIF.pipeline_add(pipeline_id, kernel, inputs, output, params_binary)
+    NIF.pipeline_add(pipeline_id, kernel, inputs, output, params)
   end
 
   @doc """

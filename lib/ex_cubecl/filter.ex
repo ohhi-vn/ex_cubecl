@@ -134,8 +134,8 @@ defmodule ExCubecl.Filter do
 
   defp apply_kernel(handle, kernel, params) do
     kernel_str = kernel_to_string(kernel)
-    params_binary = :erlang.term_to_binary(Map.new(params))
-    NIF.kernel_run(kernel_str, [handle], handle, params_binary)
+    params_map = Map.new(params)
+    NIF.kernel_run(kernel_str, [handle], handle, params_map)
   end
 
   # Maps filter atom names to their underlying kernel names.

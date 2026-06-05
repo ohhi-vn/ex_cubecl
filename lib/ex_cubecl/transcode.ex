@@ -117,13 +117,15 @@ defmodule ExCubecl.Transcode do
 
   # ── Private ─────────────────────────────────────────────────
 
-  defp transcode_loop(src, enc) do
+  defp transcode_loop(src, enc, max_frames \\ 100)
+  defp transcode_loop(_src, _enc, 0), do: :ok
+  defp transcode_loop(src, enc, remaining) do
     case ExCubecl.Media.read_frame(src, :video) do
       {:ok, frame} ->
         result = write_frame(enc, frame)
 
         case result do
-          :ok -> transcode_loop(src, enc)
+          :ok -> transcode_loop(src, enc, remaining - 1)
           {:error, reason} -> {:error, reason}
         end
 

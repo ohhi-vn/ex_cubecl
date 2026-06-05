@@ -29,7 +29,7 @@ defmodule ExCubecl.Audio do
     gains = Keyword.get(opts, :gains, Enum.map(tracks, fn _ -> 1.0 end))
     handles = Enum.map(tracks, & &1.handle)
 
-    params = :erlang.term_to_binary(%{gains: gains})
+    params = [{"gains", gains}]
 
     case tracks do
       [first | _] ->
@@ -57,8 +57,7 @@ defmodule ExCubecl.Audio do
     duck_level = Keyword.get(opts, :duck_level, -12)
     duck_gain = :math.pow(10, duck_level / 20)
 
-    params = :erlang.term_to_binary(%{duck_gain: duck_gain})
-
+    params = [{"duck_gain", duck_gain}]
     result = NIF.kernel_run("pcm_mix", [bg.handle, fg.handle], bg.handle, params)
 
     case result do
@@ -80,18 +79,22 @@ defmodule ExCubecl.Audio do
     from = Keyword.fetch!(opts, :from)
     to = Keyword.fetch!(opts, :to)
 
-    params = :erlang.term_to_binary(%{from: from, to: to})
+    params = [{"from", from}, {"to", to}]
 
-    result = NIF.kernel_run("resample_linear", [samples.handle], samples.handle, params)
+    try do
+      result = NIF.kernel_run("resample_linear", [samples.handle], samples.handle, params)
 
-    case result do
-      {:ok, _cmd_id} ->
-        ratio = to / from
-        new_frames = round(samples.frames * ratio)
-        {:ok, %AudioSamples{samples | sample_rate: to, frames: new_frames}}
+      case result do
+        {:ok, _cmd_id} ->
+          ratio = to / from
+          new_frames = round(samples.frames * ratio)
+          {:ok, %AudioSamples{samples | sample_rate: to, frames: new_frames}}
 
-      {:error, reason} ->
-        {:error, reason}
+        {:error, reason} ->
+          {:error, reason}
+      end
+    rescue
+      e in ErlangError -> {:error, Exception.message(e)}
     end
   end
 
@@ -104,8 +107,7 @@ defmodule ExCubecl.Audio do
   """
   @spec channels(samples(), atom(), atom()) :: {:ok, samples()} | {:error, term()}
   def channels(%AudioSamples{} = samples, from_layout, to_layout) do
-    params = :erlang.term_to_binary(%{from: from_layout, to: to_layout})
-
+    params = [{"from", from_layout}, {"to", to_layout}]
     result = NIF.kernel_run("pcm_mix", [samples.handle], samples.handle, params)
 
     case result do

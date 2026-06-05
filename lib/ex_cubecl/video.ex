@@ -37,8 +37,7 @@ defmodule ExCubecl.Video do
     y = Keyword.get(opts, :y, 0)
     alpha = Keyword.get(opts, :alpha, 1.0)
 
-    params = :erlang.term_to_binary(%{x: x, y: y, alpha: alpha})
-
+    params = [{"x", x}, {"y", y}, {"alpha", alpha}]
     result = NIF.kernel_run("overlay_alpha", [base.handle, overlay.handle], base.handle, params)
 
     case result do
@@ -60,8 +59,7 @@ defmodule ExCubecl.Video do
     mode = Keyword.get(opts, :mode, :dissolve)
     ratio = Keyword.get(opts, :ratio, 0.5)
 
-    params = :erlang.term_to_binary(%{mode: mode, ratio: ratio})
-
+    params = [{"mode", mode}, {"ratio", ratio}]
     result = NIF.kernel_run("video_mix", [frame_a.handle, frame_b.handle], frame_a.handle, params)
 
     case result do
@@ -83,8 +81,7 @@ defmodule ExCubecl.Video do
     width = Keyword.fetch!(opts, :width)
     height = Keyword.fetch!(opts, :height)
 
-    params = :erlang.term_to_binary(%{width: width, height: height})
-
+    params = [{"width", width}, {"height", height}]
     result = NIF.kernel_run("bicubic_scale", [frame.handle], frame.handle, params)
 
     case result do
@@ -103,8 +100,7 @@ defmodule ExCubecl.Video do
   @spec convert(frame(), pixel_format(), pixel_format()) :: {:ok, frame()} | {:error, term()}
   def convert(%VideoFrame{} = frame, from_format, _to_format)
       when from_format in [:yuv420p, :nv12] do
-    params = :erlang.term_to_binary(%{from: from_format, to: :rgb24})
-
+    params = [{"from", from_format}, {"to", :rgb24}]
     result = NIF.kernel_run("yuv_to_rgb", [frame.handle], frame.handle, params)
 
     case result do
@@ -134,10 +130,8 @@ defmodule ExCubecl.Video do
     width = Keyword.fetch!(opts, :width)
     height = Keyword.fetch!(opts, :height)
 
-    params = :erlang.term_to_binary(%{x: x, y: y, width: width, height: height})
-
-    # Crop is implemented as a kernel that copies the sub-region
-    result = NIF.kernel_run("bicubic_scale", [frame.handle], frame.handle, params)
+    params = [{"x", x}, {"y", y}, {"width", width}, {"height", height}]
+    result = NIF.kernel_run("video_crop", [frame.handle], frame.handle, params)
 
     case result do
       {:ok, _cmd_id} -> {:ok, %VideoFrame{frame | width: width, height: height}}
