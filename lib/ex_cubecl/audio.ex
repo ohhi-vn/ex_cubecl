@@ -12,7 +12,6 @@ defmodule ExCubecl.Audio do
       mono = ExCubecl.Audio.channels(samples, :stereo, :mono)
   """
 
-  alias ExCubecl.NIF
   alias ExCubecl.AudioSamples
 
   @type samples :: AudioSamples.t()
@@ -29,11 +28,11 @@ defmodule ExCubecl.Audio do
     gains = Keyword.get(opts, :gains, Enum.map(tracks, fn _ -> 1.0 end))
     handles = Enum.map(tracks, & &1.handle)
 
-    params = [{"gains", gains}]
+    params = %{gains: gains}
 
     case tracks do
       [first | _] ->
-        result = NIF.kernel_run("pcm_mix", handles, first.handle, params)
+        result = ExCubecl.run_kernel("pcm_mix", handles, first.handle, params)
 
         case result do
           {:ok, _cmd_id} -> {:ok, first}
@@ -57,8 +56,8 @@ defmodule ExCubecl.Audio do
     duck_level = Keyword.get(opts, :duck_level, -12)
     duck_gain = :math.pow(10, duck_level / 20)
 
-    params = [{"duck_gain", duck_gain}]
-    result = NIF.kernel_run("pcm_mix", [bg.handle, fg.handle], bg.handle, params)
+    params = %{duck_gain: duck_gain}
+    result = ExCubecl.run_kernel("pcm_mix", [bg.handle, fg.handle], bg.handle, params)
 
     case result do
       {:ok, _cmd_id} -> {:ok, bg}
@@ -79,10 +78,10 @@ defmodule ExCubecl.Audio do
     from = Keyword.fetch!(opts, :from)
     to = Keyword.fetch!(opts, :to)
 
-    params = [{"from", from}, {"to", to}]
+    params = %{from: from, to: to}
 
     try do
-      result = NIF.kernel_run("resample_linear", [samples.handle], samples.handle, params)
+      result = ExCubecl.run_kernel("resample_linear", [samples.handle], samples.handle, params)
 
       case result do
         {:ok, _cmd_id} ->
@@ -107,8 +106,8 @@ defmodule ExCubecl.Audio do
   """
   @spec channels(samples(), atom(), atom()) :: {:ok, samples()} | {:error, term()}
   def channels(%AudioSamples{} = samples, from_layout, to_layout) do
-    params = [{"from", from_layout}, {"to", to_layout}]
-    result = NIF.kernel_run("pcm_mix", [samples.handle], samples.handle, params)
+    params = %{from: from_layout, to: to_layout}
+    result = ExCubecl.run_kernel("pcm_mix", [samples.handle], samples.handle, params)
 
     case result do
       {:ok, _cmd_id} ->

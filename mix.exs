@@ -1,7 +1,7 @@
 defmodule ExCubecl.MixProject do
   use Mix.Project
 
-  @version "0.4.2"
+  @version "0.5.0"
   @source_url "https://github.com/ohhi-vn/ex_cubecl"
 
   def project do
@@ -36,6 +36,7 @@ defmodule ExCubecl.MixProject do
   defp deps do
     [
       {:rustler, "~> 0.37", runtime: false},
+      {:jason, "~> 1.4"},
       {:ex_doc, "~> 0.40", only: :dev, runtime: false},
       # Phase 2: .cube LUT file parser (optional, pure Elixir)
       {:nimble_parsec, "~> 1.4", optional: true}

@@ -12,7 +12,8 @@
 
 use dashmap::DashMap;
 use parking_lot::Mutex;
-use rustler::{Atom, Encoder, Env, Error, NifResult, ResourceArc, Term};
+
+use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
@@ -376,17 +377,21 @@ fn kernel_run<'a>(
 ) -> NifResult<Term<'a>> {
     let name_str: String = name.decode()?;
     let input_resources: Vec<ResourceArc<Buffer>> = inputs.decode()?;
-    // Decode params from Elixir map term into HashMap<String, Term>
-    let params_map: HashMap<String, Term<'a>> = {
-        let mut hm = HashMap::new();
-        // Use rustler's Map type to iterate over key-value pairs
-        let map = rustler::types::map::Map::from_term(params)?;
-        for (key_term, val) in map.iter() {
-            if let Ok(key_str) = key_term.decode::<String>() {
-                hm.insert(key_str, val);
+
+    // Decode params from Erlang-term-encoded binary
+    // :erlang.term_to_binary(map) → env.binary_to_term → Term → serde_json::Value
+    let params_json: serde_json::Value = match params.decode::<rustler::Binary>() {
+        Ok(bin) => {
+            let bytes = bin.as_slice();
+            if bytes.is_empty() {
+                serde_json::Value::Object(serde_json::Map::new())
+            } else {
+                let json_str = std::str::from_utf8(bytes).unwrap_or("{}");
+                serde_json::from_str(json_str)
+                    .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()))
             }
         }
-        hm
+        Err(_) => serde_json::Value::Object(serde_json::Map::new()),
     };
 
     if !AVAILABLE_KERNELS.contains(&name_str.as_str()) {
@@ -398,10 +403,8 @@ fn kernel_run<'a>(
     }
 
     // Execute the kernel on the CPU (simulating GPU execution).
-    // Phase 2 kernels operate on raw byte buffers (video frames) and
-    // f32 sample buffers (audio). Params are decoded per-kernel.
+    // Each kernel receives the raw params Term and extracts what it needs.
     match name_str.as_str() {
-        // ── Phase 1 — compute ──────────────────────────────
         "elementwise_add" => kernel_elementwise_add(&input_resources, &output)?,
         "elementwise_mul" => kernel_elementwise_mul(&input_resources, &output)?,
         "elementwise_sub" => kernel_elementwise_sub(&input_resources, &output)?,
@@ -409,27 +412,25 @@ fn kernel_run<'a>(
         "relu" => kernel_relu(&input_resources, &output)?,
         "sigmoid" => kernel_sigmoid(&input_resources, &output)?,
         "tanh" => kernel_tanh(&input_resources, &output)?,
-        // ── Phase 2 — video kernels ────────────────────────
-        "yuv_to_rgb" => kernel_yuv_to_rgb(&input_resources, &output, &params_map)?,
-        "overlay_alpha" => kernel_overlay_alpha(&input_resources, &output, &params_map)?,
-        "video_mix" => kernel_video_mix(&input_resources, &output, &params_map)?,
-        "gaussian_blur" => kernel_gaussian_blur(&input_resources, &output, &params_map)?,
-        "bicubic_scale" => kernel_bicubic_scale(&input_resources, &output, &params_map)?,
-        "lut_apply" => kernel_lut_apply(&input_resources, &output, &params_map)?,
-        "chroma_key" => kernel_chroma_key(&input_resources, &output, &params_map)?,
-        "sharpen" => kernel_sharpen(&input_resources, &output, &params_map)?,
+        "yuv_to_rgb" => kernel_yuv_to_rgb(&input_resources, &output, &params_json)?,
+        "overlay_alpha" => kernel_overlay_alpha(&input_resources, &output, &params_json)?,
+        "video_mix" => kernel_video_mix(&input_resources, &output, &params_json)?,
+        "gaussian_blur" => kernel_gaussian_blur(&input_resources, &output, &params_json)?,
+        "bicubic_scale" => kernel_bicubic_scale(&input_resources, &output, &params_json)?,
+        "lut_apply" => kernel_lut_apply(&input_resources, &output, &params_json)?,
+        "chroma_key" => kernel_chroma_key(&input_resources, &output, &params_json)?,
+        "sharpen" => kernel_sharpen(&input_resources, &output, &params_json)?,
         "brightness_contrast" => {
-            kernel_brightness_contrast(&input_resources, &output, &params_map)?
+            kernel_brightness_contrast(&input_resources, &output, &params_json)?
         }
-        "denoise" => kernel_denoise(&input_resources, &output, &params_map)?,
-        "video_crop" => kernel_video_crop(&input_resources, &output, &params_map)?,
-        // ── Phase 2 — audio kernels ────────────────────────
-        "pcm_mix" => kernel_pcm_mix(&input_resources, &output, &params_map)?,
-        "pcm_normalize" => kernel_pcm_normalize(&input_resources, &output, &params_map)?,
-        "biquad_filter" => kernel_biquad_filter(&input_resources, &output, &params_map)?,
-        "fft_convolve" => kernel_fft_convolve(&input_resources, &output, &params_map)?,
-        "resample_linear" => kernel_resample_linear(&input_resources, &output, &params_map)?,
-        "dynamics_compress" => kernel_dynamics_compress(&input_resources, &output, &params_map)?,
+        "denoise" => kernel_denoise(&input_resources, &output, &params_json)?,
+        "video_crop" => kernel_video_crop(&input_resources, &output, &params_json)?,
+        "pcm_mix" => kernel_pcm_mix(&input_resources, &output, &params_json)?,
+        "pcm_normalize" => kernel_pcm_normalize(&input_resources, &output, &params_json)?,
+        "biquad_filter" => kernel_biquad_filter(&input_resources, &output, &params_json)?,
+        "fft_convolve" => kernel_fft_convolve(&input_resources, &output, &params_json)?,
+        "resample_linear" => kernel_resample_linear(&input_resources, &output, &params_json)?,
+        "dynamics_compress" => kernel_dynamics_compress(&input_resources, &output, &params_json)?,
         // ── Unknown but declared kernels ────────────────────
         other => {
             let _ = (input_resources, output, other);
@@ -585,10 +586,10 @@ fn kernel_tanh(inputs: &[ResourceArc<Buffer>], output: &ResourceArc<Buffer>) -> 
 /// YUV420p → RGB24 color space conversion.
 /// Params: none (uses buffer size to infer dimensions from 1920x1080 default).
 /// Input: YUV420p byte buffer. Output: RGB24 byte buffer (same size, truncated).
-fn kernel_yuv_to_rgb<'a>(
+fn kernel_yuv_to_rgb(
     inputs: &[ResourceArc<Buffer>],
     output: &ResourceArc<Buffer>,
-    _params: &HashMap<String, Term<'a>>,
+    _params: &serde_json::Value,
 ) -> NifResult<()> {
     let input = inputs[0].data().clone();
     let mut out = output.data();
@@ -636,26 +637,17 @@ fn kernel_yuv_to_rgb<'a>(
 
 /// Alpha compositing: overlay onto base at (x, y) with opacity alpha.
 /// Params: {x, y, alpha}
-fn kernel_overlay_alpha<'a>(
+fn kernel_overlay_alpha(
     inputs: &[ResourceArc<Buffer>],
     output: &ResourceArc<Buffer>,
-    params: &HashMap<String, Term<'a>>,
+    params: &serde_json::Value,
 ) -> NifResult<()> {
     if inputs.len() < 2 {
         return Ok(());
     }
-    let _x: usize = params
-        .get("x")
-        .and_then(|t| t.decode::<usize>().ok())
-        .unwrap_or(0);
-    let _y: usize = params
-        .get("y")
-        .and_then(|t| t.decode::<usize>().ok())
-        .unwrap_or(0);
-    let alpha: f32 = params
-        .get("alpha")
-        .and_then(|t| t.decode::<f32>().ok())
-        .unwrap_or(1.0);
+    let _x: usize = params.get("x").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let _y: usize = params.get("y").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let alpha: f32 = params.get("alpha").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
 
     // Clone input data to avoid deadlock when output is the same buffer as input
     let base_data = inputs[0].data().clone();
@@ -674,22 +666,20 @@ fn kernel_overlay_alpha<'a>(
 
 /// Blend two video frames using dissolve/add/multiply mode.
 /// Params: {mode, ratio}
-fn kernel_video_mix<'a>(
+fn kernel_video_mix(
     inputs: &[ResourceArc<Buffer>],
     output: &ResourceArc<Buffer>,
-    params: &HashMap<String, Term<'a>>,
+    params: &serde_json::Value,
 ) -> NifResult<()> {
     if inputs.len() < 2 {
         return Ok(());
     }
-    let ratio: f32 = params
-        .get("ratio")
-        .and_then(|t| t.decode::<f32>().ok())
-        .unwrap_or(0.5);
+    let ratio: f32 = params.get("ratio").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
     let mode: String = params
         .get("mode")
-        .and_then(|t| t.decode::<String>().ok())
-        .unwrap_or_else(|| "dissolve".to_string());
+        .and_then(|v| v.as_str())
+        .unwrap_or("dissolve")
+        .to_string();
 
     let a = inputs[0].data().clone();
     let b = inputs[1].data().clone();
@@ -711,17 +701,14 @@ fn kernel_video_mix<'a>(
 
 /// Separable 3x3 box blur (fast approximation of gaussian).
 /// Params: {radius}
-fn kernel_gaussian_blur<'a>(
+fn kernel_gaussian_blur(
     inputs: &[ResourceArc<Buffer>],
     output: &ResourceArc<Buffer>,
-    params: &HashMap<String, Term<'a>>,
+    params: &serde_json::Value,
 ) -> NifResult<()> {
     let input = inputs[0].data().clone();
     let mut out = output.data();
-    let radius: usize = params
-        .get("radius")
-        .and_then(|t| t.decode::<usize>().ok())
-        .unwrap_or(1);
+    let radius: usize = params.get("radius").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
     let len = input.len().min(out.len());
     if len == 0 {
         return Ok(());
@@ -742,24 +729,18 @@ fn kernel_gaussian_blur<'a>(
 /// Nearest-neighbor scale (fast resize for video frames).
 /// Params: {width, height} — target dimensions.
 /// For simplicity, treats the buffer as a 1D stream and resamples linearly.
-fn kernel_bicubic_scale<'a>(
+fn kernel_bicubic_scale(
     inputs: &[ResourceArc<Buffer>],
     output: &ResourceArc<Buffer>,
-    params: &HashMap<String, Term<'a>>,
+    params: &serde_json::Value,
 ) -> NifResult<()> {
     let input = inputs[0].data().clone();
     let mut out = output.data();
     if input.is_empty() || out.is_empty() {
         return Ok(());
     }
-    let dst_width: usize = params
-        .get("width")
-        .and_then(|t| t.decode::<usize>().ok())
-        .unwrap_or(0);
-    let dst_height: usize = params
-        .get("height")
-        .and_then(|t| t.decode::<usize>().ok())
-        .unwrap_or(0);
+    let dst_width: usize = params.get("width").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let dst_height: usize = params.get("height").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
 
     // If no dimensions specified, just copy
     if dst_width == 0 || dst_height == 0 {
@@ -788,10 +769,10 @@ fn kernel_bicubic_scale<'a>(
 
 /// LUT color grade — applies a simple identity/gamma LUT.
 /// Params: {file} — LUT file path (ignored in CPU stub; applies gamma curve).
-fn kernel_lut_apply<'a>(
+fn kernel_lut_apply(
     inputs: &[ResourceArc<Buffer>],
     output: &ResourceArc<Buffer>,
-    _params: &HashMap<String, Term<'a>>,
+    _params: &serde_json::Value,
 ) -> NifResult<()> {
     let input = inputs[0].data().clone();
     let mut out = output.data();
@@ -808,17 +789,17 @@ fn kernel_lut_apply<'a>(
 
 /// Green/blue screen chroma key.
 /// Params: {color: {r, g, b}, threshold}
-fn kernel_chroma_key<'a>(
+fn kernel_chroma_key(
     inputs: &[ResourceArc<Buffer>],
     output: &ResourceArc<Buffer>,
-    params: &HashMap<String, Term<'a>>,
+    params: &serde_json::Value,
 ) -> NifResult<()> {
     let input = inputs[0].data().clone();
     let mut out = output.data();
     let threshold: f32 = params
         .get("threshold")
-        .and_then(|t| t.decode::<f32>().ok())
-        .unwrap_or(0.3);
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.3) as f32;
 
     // Default key color: green (0, 177, 64)
     let key_r: f32 = 0.0;
@@ -847,17 +828,17 @@ fn kernel_chroma_key<'a>(
 
 /// Unsharp mask sharpen.
 /// Params: {strength}
-fn kernel_sharpen<'a>(
+fn kernel_sharpen(
     inputs: &[ResourceArc<Buffer>],
     output: &ResourceArc<Buffer>,
-    params: &HashMap<String, Term<'a>>,
+    params: &serde_json::Value,
 ) -> NifResult<()> {
     let input = inputs[0].data().clone();
     let mut out = output.data();
     let strength: f32 = params
         .get("strength")
-        .and_then(|t| t.decode::<f32>().ok())
-        .unwrap_or(1.0);
+        .and_then(|v| v.as_f64())
+        .unwrap_or(1.0) as f32;
     let len = input.len().min(out.len());
     if len == 0 {
         return Ok(());
@@ -885,21 +866,21 @@ fn kernel_sharpen<'a>(
 
 /// Brightness and contrast adjustment.
 /// Params: {brightness, contrast}
-fn kernel_brightness_contrast<'a>(
+fn kernel_brightness_contrast(
     inputs: &[ResourceArc<Buffer>],
     output: &ResourceArc<Buffer>,
-    params: &HashMap<String, Term<'a>>,
+    params: &serde_json::Value,
 ) -> NifResult<()> {
     let input = inputs[0].data().clone();
     let mut out = output.data();
     let brightness: f32 = params
         .get("brightness")
-        .and_then(|t| t.decode::<f32>().ok())
-        .unwrap_or(0.0);
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0) as f32;
     let contrast: f32 = params
         .get("contrast")
-        .and_then(|t| t.decode::<f32>().ok())
-        .unwrap_or(1.0);
+        .and_then(|v| v.as_f64())
+        .unwrap_or(1.0) as f32;
     let len = input.len().min(out.len());
 
     for i in 0..len {
@@ -912,17 +893,17 @@ fn kernel_brightness_contrast<'a>(
 
 /// Simple denoise: median-like filter using local averaging.
 /// Params: {strength}
-fn kernel_denoise<'a>(
+fn kernel_denoise(
     inputs: &[ResourceArc<Buffer>],
     output: &ResourceArc<Buffer>,
-    params: &HashMap<String, Term<'a>>,
+    params: &serde_json::Value,
 ) -> NifResult<()> {
     let input = inputs[0].data().clone();
     let mut out = output.data();
     let strength: f32 = params
         .get("strength")
-        .and_then(|t| t.decode::<f32>().ok())
-        .unwrap_or(0.5);
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.5) as f32;
     let len = input.len().min(out.len());
     if len == 0 {
         return Ok(());
@@ -950,24 +931,18 @@ fn kernel_denoise<'a>(
 /// Crop a video frame to the specified rectangle.
 /// Params: {x, y, width, height}
 /// Assumes the buffer is a flat byte buffer (YUV420p or RGB).
-fn kernel_video_crop<'a>(
+fn kernel_video_crop(
     inputs: &[ResourceArc<Buffer>],
     output: &ResourceArc<Buffer>,
-    params: &HashMap<String, Term<'a>>,
+    params: &serde_json::Value,
 ) -> NifResult<()> {
     let input = inputs[0].data().clone();
     let mut out = output.data();
 
-    let x: usize = params.get("x").and_then(|t| t.decode().ok()).unwrap_or(0);
-    let y: usize = params.get("y").and_then(|t| t.decode().ok()).unwrap_or(0);
-    let crop_w: usize = params
-        .get("width")
-        .and_then(|t| t.decode().ok())
-        .unwrap_or(0);
-    let crop_h: usize = params
-        .get("height")
-        .and_then(|t| t.decode().ok())
-        .unwrap_or(0);
+    let x: usize = params.get("x").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let y: usize = params.get("y").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let crop_w: usize = params.get("width").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let crop_h: usize = params.get("height").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
 
     if crop_w == 0 || crop_h == 0 {
         return Ok(());
@@ -995,10 +970,10 @@ fn kernel_video_crop<'a>(
 
 /// Mix multiple audio tracks with per-track gain.
 /// Params: {gains: [f32, ...]}
-fn kernel_pcm_mix<'a>(
+fn kernel_pcm_mix(
     inputs: &[ResourceArc<Buffer>],
     output: &ResourceArc<Buffer>,
-    params: &HashMap<String, Term<'a>>,
+    params: &serde_json::Value,
 ) -> NifResult<()> {
     if inputs.is_empty() {
         return Ok(());
@@ -1006,7 +981,13 @@ fn kernel_pcm_mix<'a>(
 
     let gains: Vec<f32> = params
         .get("gains")
-        .and_then(|t| t.decode::<Vec<f32>>().ok())
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_f64())
+                .map(|f| f as f32)
+                .collect()
+        })
         .unwrap_or_else(|| vec![1.0; inputs.len()]);
 
     // Clone all input tracks BEFORE locking output to avoid deadlock when
@@ -1027,7 +1008,8 @@ fn kernel_pcm_mix<'a>(
     let out_len = out.len();
 
     // Mix: sum all tracks with gain, clamp to [-1.0, 1.0]
-    for i in 0..out_len / 4 {
+    let n_samples = out_len / 4;
+    for i in 0..n_samples {
         let mut sum = 0.0f32;
         for (track_idx, track) in tracks.iter().enumerate() {
             if i < track.len() {
@@ -1038,7 +1020,11 @@ fn kernel_pcm_mix<'a>(
         let clamped = sum.clamp(-1.0, 1.0);
         let out_idx = i * 4;
         if out_idx + 4 <= out_len {
-            out[out_idx..out_idx + 4].copy_from_slice(&clamped.to_ne_bytes());
+            let bytes = clamped.to_ne_bytes();
+            out[out_idx] = bytes[0];
+            out[out_idx + 1] = bytes[1];
+            out[out_idx + 2] = bytes[2];
+            out[out_idx + 3] = bytes[3];
         }
     }
     Ok(())
@@ -1046,10 +1032,10 @@ fn kernel_pcm_mix<'a>(
 
 /// Peak normalize audio to 0 dBFS.
 /// Params: none (or optional target_db)
-fn kernel_pcm_normalize<'a>(
+fn kernel_pcm_normalize(
     inputs: &[ResourceArc<Buffer>],
     output: &ResourceArc<Buffer>,
-    _params: &HashMap<String, Term<'a>>,
+    _params: &serde_json::Value,
 ) -> NifResult<()> {
     let input = inputs[0].data().clone();
     let mut out = output.data();
@@ -1081,10 +1067,10 @@ fn kernel_pcm_normalize<'a>(
 /// Biquad IIR filter (EQ).
 /// Params: {b0, b1, b2, a1, a2} coefficients, or simplified as {bands: [...]}.
 /// For the stub, applies a simple high-shelf EQ.
-fn kernel_biquad_filter<'a>(
+fn kernel_biquad_filter(
     inputs: &[ResourceArc<Buffer>],
     output: &ResourceArc<Buffer>,
-    _params: &HashMap<String, Term<'a>>,
+    _params: &serde_json::Value,
 ) -> NifResult<()> {
     let input = inputs[0].data().clone();
     let mut out = output.data();
@@ -1111,17 +1097,14 @@ fn kernel_biquad_filter<'a>(
 
 /// FFT convolution (reverb). Stub: applies a simple delay-based reverb.
 /// Params: {room_size, wet}
-fn kernel_fft_convolve<'a>(
+fn kernel_fft_convolve(
     inputs: &[ResourceArc<Buffer>],
     output: &ResourceArc<Buffer>,
-    params: &HashMap<String, Term<'a>>,
+    params: &serde_json::Value,
 ) -> NifResult<()> {
     let input = inputs[0].data().clone();
     let mut out = output.data();
-    let wet: f32 = params
-        .get("wet")
-        .and_then(|t| t.decode::<f32>().ok())
-        .unwrap_or(0.2);
+    let wet: f32 = params.get("wet").and_then(|v| v.as_f64()).unwrap_or(0.2) as f32;
     let copy_len = input.len().min(out.len());
 
     // Simple delay-based reverb: mix original with delayed attenuated copy
@@ -1146,21 +1129,21 @@ fn kernel_fft_convolve<'a>(
 
 /// Linear interpolation resampler.
 /// Params: {from, to} sample rates
-fn kernel_resample_linear<'a>(
+fn kernel_resample_linear(
     inputs: &[ResourceArc<Buffer>],
     output: &ResourceArc<Buffer>,
-    params: &HashMap<String, Term<'a>>,
+    params: &serde_json::Value,
 ) -> NifResult<()> {
     let input = inputs[0].data().clone();
     let mut out = output.data();
     let from_rate: f32 = params
         .get("from")
-        .and_then(|t| t.decode::<f32>().ok())
-        .unwrap_or(48000.0);
+        .and_then(|v| v.as_f64().or_else(|| v.as_i64().map(|i| i as f64)))
+        .unwrap_or(48000.0) as f32;
     let to_rate: f32 = params
         .get("to")
-        .and_then(|t| t.decode::<f32>().ok())
-        .unwrap_or(48000.0);
+        .and_then(|v| v.as_f64().or_else(|| v.as_i64().map(|i| i as f64)))
+        .unwrap_or(48000.0) as f32;
 
     if from_rate <= 0.0 || to_rate <= 0.0 {
         return Err(Error::RaiseTerm(Box::new(format!(
@@ -1204,21 +1187,18 @@ fn kernel_resample_linear<'a>(
 
 /// Look-ahead dynamics compressor.
 /// Params: {threshold, ratio, attack_ms, release_ms}
-fn kernel_dynamics_compress<'a>(
+fn kernel_dynamics_compress(
     inputs: &[ResourceArc<Buffer>],
     output: &ResourceArc<Buffer>,
-    params: &HashMap<String, Term<'a>>,
+    params: &serde_json::Value,
 ) -> NifResult<()> {
     let input = inputs[0].data().clone();
     let mut out = output.data();
     let threshold_db: f32 = params
         .get("threshold")
-        .and_then(|t| t.decode::<f32>().ok())
-        .unwrap_or(-18.0);
-    let ratio: f32 = params
-        .get("ratio")
-        .and_then(|t| t.decode::<f32>().ok())
-        .unwrap_or(4.0);
+        .and_then(|v| v.as_f64())
+        .unwrap_or(-18.0) as f32;
+    let ratio: f32 = params.get("ratio").and_then(|v| v.as_f64()).unwrap_or(4.0) as f32;
     let copy_len = input.len().min(out.len());
 
     let threshold_linear = 10.0f32.powf(threshold_db / 20.0);
@@ -1357,17 +1337,9 @@ fn pipeline_add<'a>(
     let name_str: String = name.decode()?;
     let input_resources: Vec<ResourceArc<Buffer>> = inputs.decode()?;
     // Params are passed as an Elixir map — decode to validate
-    let _params_map: HashMap<String, Term<'a>> = {
-        let mut hm = HashMap::new();
-        if let Ok(map) = rustler::types::map::Map::from_term(params) {
-            for (key_term, val) in map.iter() {
-                if let Ok(key_str) = key_term.decode::<String>() {
-                    hm.insert(key_str, val);
-                }
-            }
-        }
-        hm
-    };
+    let _params_map: HashMap<String, Term<'a>> = params
+        .decode::<HashMap<String, Term<'a>>>()
+        .unwrap_or_default();
 
     match PIPELINES.get_mut(&pipeline_id) {
         Some(mut pipeline) => {

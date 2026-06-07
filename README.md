@@ -44,7 +44,7 @@ Add `ex_cubecl` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:ex_cubecl, "~> 0.4.1"}
+    {:ex_cubecl, "~> 0.5"}
   ]
 end
 ```
@@ -54,7 +54,7 @@ end
 ```elixir
 # Check device
 {:ok, info} = ExCubecl.device_info()
-# %{device_name: "CubeCL GPU (Phase 1 — CPU simulation)", ...}
+# %{device_name: "CubeCL GPU (Phase 2 — media extensions, CPU simulation)", ...}
 # Note: Currently runs on CPU; GPU dispatch coming in a future release
 
 # Create GPU buffers (returns resource references, not integer IDs)

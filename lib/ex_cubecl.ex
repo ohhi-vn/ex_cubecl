@@ -169,10 +169,11 @@ defmodule ExCubecl do
     * `output` — output buffer reference
     * `params` — optional map of kernel parameters (default `%{}`)
   """
-  @spec run_kernel(String.t(), [reference()], reference(), [{atom(), term()}]) ::
+  @spec run_kernel(String.t(), [reference()], reference(), map()) ::
           {:ok, non_neg_integer()} | {:error, term()}
   def run_kernel(name, inputs, output, params \\ %{}) when is_binary(name) do
-    NIF.kernel_run(name, inputs, output, params)
+    params_json = Jason.encode!(params)
+    NIF.kernel_run(name, inputs, output, params_json)
   end
 
   @doc "Returns the list of available kernel names."
@@ -224,7 +225,7 @@ defmodule ExCubecl do
       {:ok, pipeline} = ExCubecl.pipeline()
       ExCubecl.pipeline_add(pipeline, "elementwise_add", [buf_a, buf_b], buf_out)
   """
-  @spec pipeline_add(non_neg_integer(), String.t(), [reference()], reference(), [{atom(), term()}]) ::
+  @spec pipeline_add(non_neg_integer(), String.t(), [reference()], reference(), map()) ::
           :ok | {:error, term()}
   def pipeline_add(pipeline_id, kernel, inputs, output, params \\ %{})
       when is_integer(pipeline_id) and is_binary(kernel) do

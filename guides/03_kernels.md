@@ -21,12 +21,13 @@ Kernels are GPU programs that operate on buffers.
 #  "elementwise_div", "relu", "sigmoid", "tanh", "matmul",
 #  "reduce_sum", "reduce_max", "reduce_min", "softmax",
 #  "layer_norm", "conv2d", "transpose", "reshape",
-#  # Phase 2 — video kernels
+# Phase 2 — video kernels
 #  "yuv_to_rgb", "overlay_alpha", "video_mix", "gaussian_blur",
 #  "bicubic_scale", "lut_apply", "chroma_key", "sharpen",
+#  "brightness_contrast", "denoise", "video_crop",
 #  # Phase 2 — audio kernels
 #  "pcm_mix", "pcm_normalize", "biquad_filter", "fft_convolve",
-#  "resample_linear", "dynamics_compress"]
+#  "resample_linear", "dynamics_compress"
 ```
 
 ## Element-wise Operations

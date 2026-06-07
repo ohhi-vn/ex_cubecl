@@ -48,7 +48,7 @@ defmodule ExCubecl.NIF do
 
   # ── Kernel execution ────────────────────────────────────────
 
-  @spec kernel_run(String.t(), [reference()], reference(), [{atom(), term()}]) ::
+  @spec kernel_run(String.t(), [reference()], reference(), map()) ::
           {:ok, non_neg_integer()} | {:error, term()}
   def kernel_run(_name, _inputs, _output, _params), do: nif_error()
   @spec kernel_list() :: {:ok, [String.t()]} | {:error, term()}
@@ -70,7 +70,7 @@ defmodule ExCubecl.NIF do
   @spec pipeline_new() :: {:ok, non_neg_integer()} | {:error, term()}
   def pipeline_new(), do: nif_error()
 
-  @spec pipeline_add(non_neg_integer(), String.t(), [reference()], reference(), [{atom(), term()}]) ::
+  @spec pipeline_add(non_neg_integer(), String.t(), [reference()], reference(), map()) ::
           :ok | {:error, term()}
   def pipeline_add(_pipeline_id, _name, _inputs, _output, _params), do: nif_error()
   @spec pipeline_run(non_neg_integer()) :: {:ok, [non_neg_integer()]} | {:error, term()}
