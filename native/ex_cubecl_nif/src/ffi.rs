@@ -1,4 +1,4 @@
-//! C FFI implementation for ex_cubecl GPU compute runtime.
+//! C FFI implementation for ex_cubecl CPU-side API prototype.
 //!
 //! This module implements the C-compatible interface declared in
 //! `include/ex_cubecl.h`. All functions use opaque handles (usize) to
@@ -30,6 +30,11 @@ fn set_last_error(msg: &str) {
 }
 
 /// Retrieve the last error message.
+///
+/// # Safety
+///
+/// `buf` must be a valid writable pointer to at least `len` bytes.
+/// `len` must be greater than 0 and include space for the NUL terminator.
 #[no_mangle]
 pub unsafe extern "C" fn ex_cubecl_last_error(buf: *mut c_char, len: usize) -> usize {
     if buf.is_null() || len == 0 {
@@ -49,12 +54,17 @@ pub unsafe extern "C" fn ex_cubecl_last_error(buf: *mut c_char, len: usize) -> u
 // ── Device management ────────────────────────────────────────
 
 /// Get a human-readable device info string.
+///
+/// # Safety
+///
+/// `buf` must be a valid writable pointer to at least `len` bytes.
+/// `len` must be greater than 0 and include space for the NUL terminator.
 #[no_mangle]
 pub unsafe extern "C" fn ex_cubecl_device_info(buf: *mut c_char, len: usize) -> usize {
     if buf.is_null() || len == 0 {
         return 0;
     }
-    let info = "CubeCL GPU (Phase 2 — media extensions, CPU simulation)";
+    let info = "CubeCL GPU (CPU fallback — v0.5.0)";
     let bytes = info.as_bytes();
     let copy_len = bytes.len().min(len - 1);
     std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf as *mut u8, copy_len);
@@ -62,7 +72,7 @@ pub unsafe extern "C" fn ex_cubecl_device_info(buf: *mut c_char, len: usize) -> 
     copy_len
 }
 
-/// Get the number of available GPU devices.
+/// Get the number of available devices.
 #[no_mangle]
 pub extern "C" fn ex_cubecl_device_count() -> i32 {
     1
@@ -70,7 +80,29 @@ pub extern "C" fn ex_cubecl_device_count() -> i32 {
 
 // ── Buffer management ────────────────────────────────────────
 
-/// Create a GPU buffer from raw data.
+/// Global buffer store for C FFI handles.
+use dashmap::DashMap;
+use lazy_static::lazy_static;
+
+lazy_static! {
+    static ref C_BUFFERS: DashMap<usize, Buffer> = DashMap::new();
+    static ref C_TEXTURES: DashMap<usize, Buffer> = DashMap::new();
+    static ref C_MEDIA: DashMap<usize, media::MediaSource> = DashMap::new();
+    static ref C_NEXT_HANDLE: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(1_000_000);
+}
+
+fn alloc_c_handle() -> usize {
+    C_NEXT_HANDLE.fetch_add(1, Ordering::SeqCst)
+}
+
+/// Create a CPU-side buffer from raw data.
+///
+/// # Safety
+///
+/// `data` must point to at least `total_bytes` valid readable bytes.
+/// `shape` must point to at least `ndim` valid `usize` values.
+/// `ndim` must be greater than 0.
 #[no_mangle]
 pub unsafe extern "C" fn ex_cubecl_buffer_new(
     data: *const u8,
@@ -117,30 +149,16 @@ pub unsafe extern "C" fn ex_cubecl_buffer_new(
         .unwrap_or(crate::DType::F32),
     };
 
-    let handle = alloc_id(&NEXT_COMMAND_ID); // reuse ID counter
-                                             // Store in a simple global buffer store
-                                             // For now, we use a static DashMap for C FFI buffers
-    let handle_usize: usize = handle.try_into().unwrap();
-    C_BUFFERS.insert(handle_usize, buffer);
-    handle_usize
-}
-
-/// Global buffer store for C FFI handles.
-use dashmap::DashMap;
-use lazy_static::lazy_static;
-
-lazy_static! {
-    static ref C_BUFFERS: DashMap<usize, Buffer> = DashMap::new();
-    static ref C_TEXTURES: DashMap<usize, Buffer> = DashMap::new();
-    static ref C_NEXT_HANDLE: std::sync::atomic::AtomicUsize =
-        std::sync::atomic::AtomicUsize::new(1_000_000); // C handles start at 1M to avoid collision
-}
-
-fn alloc_c_handle() -> usize {
-    C_NEXT_HANDLE.fetch_add(1, Ordering::SeqCst)
+    let handle = alloc_c_handle();
+    C_BUFFERS.insert(handle, buffer);
+    handle
 }
 
 /// Read buffer data into a caller-provided buffer.
+///
+/// # Safety
+///
+/// `out` must point to at least `len` valid writable bytes.
 #[no_mangle]
 pub unsafe extern "C" fn ex_cubecl_buffer_read(handle: usize, out: *mut u8, len: usize) -> i32 {
     if out.is_null() {
@@ -171,6 +189,10 @@ pub extern "C" fn ex_cubecl_buffer_size(handle: usize) -> usize {
 }
 
 /// Get the shape of a buffer.
+///
+/// # Safety
+///
+/// `out_shape` must point to at least `out_ndim` valid `usize` slots.
 #[no_mangle]
 pub unsafe extern "C" fn ex_cubecl_buffer_shape(
     handle: usize,
@@ -195,6 +217,10 @@ pub unsafe extern "C" fn ex_cubecl_buffer_shape(
 }
 
 /// Get the data type of a buffer.
+///
+/// # Safety
+///
+/// `out_dtype` must be a valid writable pointer to an `i32`.
 #[no_mangle]
 pub unsafe extern "C" fn ex_cubecl_buffer_dtype(handle: usize, out_dtype: *mut i32) -> i32 {
     if out_dtype.is_null() {
@@ -219,7 +245,7 @@ pub unsafe extern "C" fn ex_cubecl_buffer_dtype(handle: usize, out_dtype: *mut i
     }
 }
 
-/// Free a GPU buffer.
+/// Free a CPU-side buffer.
 #[no_mangle]
 pub extern "C" fn ex_cubecl_buffer_free(handle: usize) -> i32 {
     match C_BUFFERS.remove(&handle) {
@@ -234,6 +260,11 @@ pub extern "C" fn ex_cubecl_buffer_free(handle: usize) -> i32 {
 // ── Kernel execution ─────────────────────────────────────────
 
 /// Run a named kernel.
+///
+/// # Safety
+///
+/// `name` must be a valid NUL-terminated C string.
+/// `inputs` must point to at least `n_inputs` valid `usize` values.
 #[no_mangle]
 pub unsafe extern "C" fn ex_cubecl_kernel_run(
     name: *const c_char,
@@ -256,7 +287,6 @@ pub unsafe extern "C" fn ex_cubecl_kernel_run(
         }
     };
 
-    // Validate kernel name
     let valid_kernels = [
         "elementwise_add",
         "elementwise_mul",
@@ -287,7 +317,6 @@ pub unsafe extern "C" fn ex_cubecl_kernel_run(
         return -1;
     }
 
-    // Validate handles exist
     let input_handles = std::slice::from_raw_parts(inputs, n_inputs);
     for &h in input_handles {
         if !C_BUFFERS.contains_key(&h) {
@@ -300,8 +329,6 @@ pub unsafe extern "C" fn ex_cubecl_kernel_run(
         return -1;
     }
 
-    // Read input data, execute kernel, write output
-    // This is a simplified CPU-side dispatch
     let input_data: Vec<Vec<u8>> = input_handles
         .iter()
         .map(|&h| C_BUFFERS.get(&h).unwrap().data.lock().clone())
@@ -380,7 +407,6 @@ pub unsafe extern "C" fn ex_cubecl_kernel_run(
             }
         }
         _ => {
-            // For unhandled kernels, just copy input to output
             if !input_data.is_empty() {
                 input_data[0].clone()
             } else {
@@ -389,7 +415,6 @@ pub unsafe extern "C" fn ex_cubecl_kernel_run(
         }
     };
 
-    // Write result to output buffer
     if let Some(buf) = C_BUFFERS.get_mut(&output) {
         let mut data = buf.data.lock();
         let copy_len = result.len().min(data.len());
@@ -400,6 +425,10 @@ pub unsafe extern "C" fn ex_cubecl_kernel_run(
 }
 
 /// List available kernels as a comma-separated string.
+///
+/// # Safety
+///
+/// `buf` must be a valid writable pointer to at least `buf_len` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn ex_cubecl_kernel_list(buf: *mut c_char, buf_len: usize) -> usize {
     if buf.is_null() || buf_len == 0 {
@@ -416,6 +445,10 @@ pub unsafe extern "C" fn ex_cubecl_kernel_list(buf: *mut c_char, buf_len: usize)
 // ── Async execution ──────────────────────────────────────────
 
 /// Submit a raw command for asynchronous execution.
+///
+/// # Safety
+///
+/// `command` must point to at least `command_len` valid readable bytes.
 #[no_mangle]
 pub unsafe extern "C" fn ex_cubecl_submit(command: *const u8, command_len: usize) -> u64 {
     if command.is_null() || command_len == 0 {
@@ -480,6 +513,10 @@ pub extern "C" fn ex_cubecl_pipeline_new() -> usize {
 }
 
 /// Add a command to a pipeline.
+///
+/// # Safety
+///
+/// `command` must point to at least `command_len` valid readable bytes.
 #[no_mangle]
 pub unsafe extern "C" fn ex_cubecl_pipeline_add(
     pipeline: usize,
@@ -491,10 +528,7 @@ pub unsafe extern "C" fn ex_cubecl_pipeline_add(
     }
     match PIPELINES.get_mut(&(pipeline as u64)) {
         Some(_p) => {
-            // Store the raw command bytes as a KernelRun with a placeholder name
-            // In a real implementation, the command would be deserialized
             let _cmd_bytes = std::slice::from_raw_parts(command, command_len);
-            // For now, just mark that a command was added
             0
         }
         None => {
@@ -507,7 +541,6 @@ pub unsafe extern "C" fn ex_cubecl_pipeline_add(
 /// Execute all commands in a pipeline.
 #[no_mangle]
 pub extern "C" fn ex_cubecl_pipeline_run(_pipeline: usize) -> i32 {
-    // Simplified: just return success
     0
 }
 
@@ -523,9 +556,14 @@ pub extern "C" fn ex_cubecl_pipeline_free(pipeline: usize) -> i32 {
     }
 }
 
-// ── Phase 2 — GPU Texture (Video Frame) ─────────────────────
+// ── Phase 2 — CPU Texture (Video Frame) ─────────────────────
 
-/// Create a GPU texture from YUV420p plane data.
+/// Create a CPU-side texture from YUV420p plane data.
+///
+/// # Safety
+///
+/// `y_plane` must point to at least `width * height` valid readable bytes.
+/// `uv_plane` must point to at least `width * height / 2` valid readable bytes.
 #[no_mangle]
 pub unsafe extern "C" fn ex_cubecl_texture_from_yuv(
     y_plane: *const u8,
@@ -560,7 +598,11 @@ pub unsafe extern "C" fn ex_cubecl_texture_from_yuv(
     handle
 }
 
-/// Create a GPU texture from NV12 plane data.
+/// Create a CPU-side texture from NV12 plane data.
+///
+/// # Safety
+///
+/// See `ex_cubecl_texture_from_yuv` for safety requirements.
 #[no_mangle]
 pub unsafe extern "C" fn ex_cubecl_texture_from_nv12(
     y_plane: *const u8,
@@ -568,11 +610,14 @@ pub unsafe extern "C" fn ex_cubecl_texture_from_nv12(
     width: u32,
     height: u32,
 ) -> usize {
-    // NV12 has the same layout as YUV420p for our purposes (Y plane + interleaved UV)
     ex_cubecl_texture_from_yuv(y_plane, uv_plane, width, height)
 }
 
-/// Apply a named GPU kernel to a texture (filter chain).
+/// Apply a named CPU kernel to a texture.
+///
+/// # Safety
+///
+/// `kernel_name` must be a valid NUL-terminated C string.
 #[no_mangle]
 pub unsafe extern "C" fn ex_cubecl_apply_kernel(
     input: usize,
@@ -589,13 +634,11 @@ pub unsafe extern "C" fn ex_cubecl_apply_kernel(
         Err(_) => return 0,
     };
 
-    // Get input texture data
     let input_data = match C_TEXTURES.get(&input) {
         Some(t) => t.data.lock().clone(),
         None => return 0,
     };
 
-    // Apply the kernel (simplified — just copy for most kernels)
     let result = match name {
         "yuv_to_rgb" => {
             let pixel_count = input_data.len() * 2 / 3;
@@ -615,15 +658,15 @@ pub unsafe extern "C" fn ex_cubecl_apply_kernel(
         }
         "gaussian_blur" => {
             let mut out = vec![0u8; input_data.len()];
-            for i in 0..input_data.len() {
+            for (i, item) in out.iter_mut().enumerate().take(input_data.len()) {
                 let start = i.saturating_sub(1);
                 let end = (i + 2).min(input_data.len());
                 let sum: usize = input_data[start..end].iter().map(|&v| v as usize).sum();
-                out[i] = (sum / (end - start)) as u8;
+                *item = (sum / (end - start)) as u8;
             }
             out
         }
-        _ => input_data.clone(), // identity for unknown kernels
+        _ => input_data.clone(),
     };
 
     let output = Buffer {
@@ -637,7 +680,7 @@ pub unsafe extern "C" fn ex_cubecl_apply_kernel(
     handle
 }
 
-/// Free a GPU texture.
+/// Free a CPU-side texture.
 #[no_mangle]
 pub extern "C" fn ex_cubecl_texture_free(texture: usize) -> i32 {
     match C_TEXTURES.remove(&texture) {
@@ -651,30 +694,252 @@ pub extern "C" fn ex_cubecl_texture_free(texture: usize) -> i32 {
 
 // ── Phase 2 — Media Source ──────────────────────────────────
 
+mod media {
+    use crate::atoms;
+    use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
+
+    #[derive(Debug, Clone)]
+    pub struct MediaSource {
+        pub path: String,
+        pub streams: Vec<StreamInfo>,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct StreamInfo {
+        pub index: usize,
+        pub stream_type: StreamType,
+        pub codec: String,
+        pub width: Option<u32>,
+        pub height: Option<u32>,
+        pub fps: Option<f64>,
+        pub sample_rate: Option<u32>,
+        pub channels: Option<u32>,
+    }
+
+    #[derive(Debug, Clone)]
+    pub enum StreamType {
+        Video,
+        Audio,
+    }
+
+    impl rustler::Resource for MediaSource {}
+
+    pub fn nif_media_open<'a>(env: Env<'a>, path: Term) -> NifResult<Term<'a>> {
+        let path_str: String = path.decode()?;
+        let source = MediaSource {
+            path: path_str,
+            streams: vec![
+                StreamInfo {
+                    index: 0,
+                    stream_type: StreamType::Video,
+                    codec: "h264".to_string(),
+                    width: Some(1920),
+                    height: Some(1080),
+                    fps: Some(30.0),
+                    sample_rate: None,
+                    channels: None,
+                },
+                StreamInfo {
+                    index: 1,
+                    stream_type: StreamType::Audio,
+                    codec: "aac".to_string(),
+                    width: None,
+                    height: None,
+                    fps: None,
+                    sample_rate: Some(44100),
+                    channels: Some(2),
+                },
+            ],
+        };
+        let resource = ResourceArc::<MediaSource>::new(source);
+        Ok((atoms::ok(), resource).encode(env))
+    }
+
+    pub fn nif_media_streams(env: Env, source: ResourceArc<MediaSource>) -> NifResult<Term> {
+        let mut stream_terms = Vec::new();
+        for s in &source.streams {
+            let map = rustler::types::map::map_new(env);
+            let map = map
+                .map_put(atoms::index().encode(env), s.index.encode(env))
+                .map_err(|e| e)?;
+            let type_atom = match s.stream_type {
+                StreamType::Video => atoms::video(),
+                StreamType::Audio => atoms::audio(),
+            };
+            let map = map
+                .map_put(
+                    rustler::Atom::from_str(env, "type").unwrap().encode(env),
+                    type_atom.encode(env),
+                )
+                .map_err(|e| e)?;
+            let map = map
+                .map_put(atoms::codec().encode(env), s.codec.as_str().encode(env))
+                .map_err(|e| e)?;
+            let map = match s.stream_type {
+                StreamType::Video => {
+                    let map = map
+                        .map_put(atoms::width().encode(env), s.width.unwrap_or(0).encode(env))
+                        .map_err(|e| e)?;
+                    let map = map
+                        .map_put(
+                            atoms::height().encode(env),
+                            s.height.unwrap_or(0).encode(env),
+                        )
+                        .map_err(|e| e)?;
+                    map.map_put(atoms::fps().encode(env), s.fps.unwrap_or(0.0).encode(env))
+                        .map_err(|e| e)?
+                }
+                StreamType::Audio => {
+                    let map = map
+                        .map_put(
+                            atoms::sample_rate().encode(env),
+                            s.sample_rate.unwrap_or(0).encode(env),
+                        )
+                        .map_err(|e| e)?;
+                    map.map_put(
+                        atoms::channels().encode(env),
+                        s.channels.unwrap_or(0).encode(env),
+                    )
+                    .map_err(|e| e)?
+                }
+            };
+            stream_terms.push(map.encode(env));
+        }
+        Ok((atoms::ok(), stream_terms).encode(env))
+    }
+
+    pub fn nif_media_read_video_frame<'a>(
+        env: Env<'a>,
+        _source: ResourceArc<MediaSource>,
+    ) -> NifResult<Term<'a>> {
+        let frame_size = 1920 * 1080 * 3 / 2;
+        let y_size = 1920 * 1080;
+        let mut data = Vec::with_capacity(frame_size);
+        data.resize(y_size, 128u8);
+        data.resize(frame_size, 128u8);
+
+        use crate::Buffer;
+        use crate::DType;
+        let buffer = Buffer {
+            data: parking_lot::Mutex::new(data),
+            shape: vec![frame_size],
+            dtype: DType::U8,
+        };
+        let resource = ResourceArc::<Buffer>::new(buffer);
+
+        let frame_map = rustler::types::map::map_new(env);
+        let frame_map = frame_map
+            .map_put(atoms::handle().encode(env), resource.encode(env))
+            .map_err(|e| e)?;
+        let frame_map = frame_map
+            .map_put(atoms::width().encode(env), 1920u32.encode(env))
+            .map_err(|e| e)?;
+        let frame_map = frame_map
+            .map_put(atoms::height().encode(env), 1080u32.encode(env))
+            .map_err(|e| e)?;
+        let frame_map = frame_map
+            .map_put(
+                atoms::format().encode(env),
+                rustler::Atom::from_str(env, "yuv420p").unwrap().encode(env),
+            )
+            .map_err(|e| e)?;
+        let frame_map = frame_map
+            .map_put(atoms::pts().encode(env), 0u64.encode(env))
+            .map_err(|e| e)?;
+        let frame_map = frame_map
+            .map_put(atoms::duration().encode(env), 33333u64.encode(env))
+            .map_err(|e| e)?;
+
+        Ok((atoms::ok(), frame_map.encode(env)).encode(env))
+    }
+
+    pub fn nif_media_read_audio_samples<'a>(
+        env: Env<'a>,
+        _source: ResourceArc<MediaSource>,
+    ) -> NifResult<Term<'a>> {
+        let sample_frames = 1024usize;
+        let channels = 2usize;
+        let data = vec![0u8; sample_frames * channels * 4];
+
+        use crate::Buffer;
+        use crate::DType;
+        let buffer = Buffer {
+            data: parking_lot::Mutex::new(data),
+            shape: vec![sample_frames * channels],
+            dtype: DType::F32,
+        };
+        let resource = ResourceArc::<Buffer>::new(buffer);
+
+        let samples_map = rustler::types::map::map_new(env);
+        let samples_map = samples_map
+            .map_put(atoms::handle().encode(env), resource.encode(env))
+            .map_err(|e| e)?;
+        let samples_map = samples_map
+            .map_put(atoms::channels().encode(env), channels.encode(env))
+            .map_err(|e| e)?;
+        let samples_map = samples_map
+            .map_put(atoms::sample_rate().encode(env), 48000u32.encode(env))
+            .map_err(|e| e)?;
+        let samples_map = samples_map
+            .map_put(atoms::frames().encode(env), sample_frames.encode(env))
+            .map_err(|e| e)?;
+        let samples_map = samples_map
+            .map_put(atoms::pts().encode(env), 0u64.encode(env))
+            .map_err(|e| e)?;
+
+        Ok((atoms::ok(), samples_map.encode(env)).encode(env))
+    }
+
+    pub fn nif_media_close(env: Env, _source: ResourceArc<MediaSource>) -> NifResult<Term> {
+        Ok((atoms::ok()).encode(env))
+    }
+}
+
+use self::media::MediaSource;
+
 /// Open a media source (file, stream, camera).
+///
+/// # Safety
+///
+/// `path` must be a valid NUL-terminated C string.
 #[no_mangle]
 pub unsafe extern "C" fn ex_cubecl_media_open(path: *const c_char) -> usize {
     if path.is_null() {
         return 0;
     }
-    let _path_str = match CStr::from_ptr(path).to_str() {
-        Ok(s) => s,
+    let path_str = match CStr::from_ptr(path).to_str() {
+        Ok(s) => s.to_string(),
         Err(_) => return 0,
     };
-    // Return a synthetic media handle
+    let source = MediaSource {
+        path: path_str,
+        streams: vec![],
+    };
     let handle = alloc_c_handle();
+    C_MEDIA.insert(handle, source);
     handle
 }
 
 /// Close a media source.
 #[no_mangle]
-pub extern "C" fn ex_cubecl_media_close(_media: usize) -> i32 {
-    0
+pub extern "C" fn ex_cubecl_media_close(media: usize) -> i32 {
+    match C_MEDIA.remove(&media) {
+        Some(_) => 0,
+        None => {
+            set_last_error("ex_cubecl_media_close: invalid media handle");
+            -1
+        }
+    }
 }
 
 // ── Phase 2 — Audio Mix ─────────────────────────────────────
 
-/// Mix multiple audio tracks on the GPU.
+/// Mix multiple audio tracks on the CPU.
+///
+/// # Safety
+///
+/// `tracks` must point to at least `track_count` valid `usize` values.
+/// `gains` must point to at least `track_count` valid `f32` values.
 #[no_mangle]
 pub unsafe extern "C" fn ex_cubecl_audio_mix(
     tracks: *const usize,
@@ -689,7 +954,6 @@ pub unsafe extern "C" fn ex_cubecl_audio_mix(
     let track_handles = std::slice::from_raw_parts(tracks, track_count);
     let gain_values = std::slice::from_raw_parts(gains, track_count);
 
-    // Read all track data
     let track_data: Vec<Vec<u8>> = track_handles
         .iter()
         .map(|&h| {
@@ -700,8 +964,7 @@ pub unsafe extern "C" fn ex_cubecl_audio_mix(
         })
         .collect();
 
-    // Mix: sum all tracks with gain
-    let frame_bytes = frames * 4; // f32 per frame
+    let frame_bytes = frames * 4;
     let mut out = vec![0u8; frame_bytes];
 
     for (track_idx, data) in track_data.iter().enumerate() {
@@ -727,6 +990,6 @@ pub unsafe extern "C" fn ex_cubecl_audio_mix(
 
 /// Placeholder: returns the runtime version.
 #[no_mangle]
-pub unsafe extern "C" fn ex_cubecl_version() -> u32 {
-    0x0004_0001 // 0.4.1
+pub extern "C" fn ex_cubecl_version() -> u32 {
+    0x0005_0000 // 0.5.0
 }

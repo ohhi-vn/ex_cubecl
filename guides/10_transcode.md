@@ -1,15 +1,15 @@
 # Transcoding Guide
 
-Complete reference for encoding and muxing media output with ExCubecl.
+Complete reference for the `ExCubecl.Transcode` API. The current release validates codec/container options and manages the encoder lifecycle via the NIF.
 
-## Supported Codecs
+## Supported Codec Names (API Validation Only)
 
 | Type  | Codecs                  |
 |-------|-------------------------|
 | Video | h264, h265, vp9, av1, prores |
 | Audio | aac, opus, mp3, flac, pcm     |
 
-## Supported Containers
+## Supported Container Names (API Validation Only)
 
 `mp4`, `mkv`, `webm`, `mov`, `ts`
 
@@ -22,18 +22,14 @@ ExCubecl.Transcode.run("input.mp4", "output.mp4",
 )
 ```
 
-This is a convenience wrapper that:
-1. Opens the input file
-2. Creates an encoder for the output
-3. Reads frames, encodes, and writes them
-4. Finalizes the output
+This example shows the file-to-file transcode API:
 
-## Frame-by-Frame Streaming Transcode
+## Frame-by-Frame Streaming
 
-For real-time processing where you need to apply filters before encoding:
+The example below shows the frame-by-frame streaming API:
 
 ```elixir
-# Start encoder
+# Start encoder (API prototype; no real encoder is created)
 {:ok, enc} = ExCubecl.Transcode.start("output.mp4",
   video: [codec: :h265, width: 1280, height: 720, bitrate: "8M"],
   audio: [codec: :aac, bitrate: "192k"]
@@ -120,7 +116,7 @@ ExCubecl.Transcode.run("input.mp4", "output.aac",
 ```elixir
 case ExCubecl.Transcode.run("input.mp4", "output.mp4", video: [codec: :h264]) do
   :ok ->
-    IO.puts("Transcode complete")
+    IO.puts("Transcode API validation complete")
 
   {:error, reason} ->
     IO.puts("Transcode failed: #{inspect(reason)}")
@@ -129,14 +125,14 @@ end
 
 ## Validation
 
-The transcode module validates codecs and containers at the Elixir level:
+The transcode module validates codec and container names at the Elixir level before passing to the NIF.
 
 ```elixir
-# Raises ArgumentError for unsupported codec
+# Returns error tuple for unsupported codec
 ExCubecl.Transcode.start("out.mp4", video: [codec: :invalid])
-# ** (ArgumentError) unsupported video codec: :invalid. Supported: h264, h265, vp9, av1, prores
+# {:error, {:unsupported_codec, :video, :invalid, nil}}
 
-# Raises ArgumentError for unsupported container
+# Returns error tuple for unsupported container
 ExCubecl.Transcode.start("out.avi", video: [codec: :h264])
-# ** (ArgumentError) unsupported container: avi. Supported: mp4, mkv, webm, mov, ts
+# {:error, {:unsupported_container, "avi", nil}}
 ```

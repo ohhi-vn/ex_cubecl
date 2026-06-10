@@ -14,7 +14,6 @@ use dashmap::DashMap;
 use parking_lot::Mutex;
 
 use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 
@@ -188,15 +187,6 @@ const AVAILABLE_KERNELS: &[&str] = &[
     "relu",
     "sigmoid",
     "tanh",
-    "matmul",
-    "reduce_sum",
-    "reduce_max",
-    "reduce_min",
-    "softmax",
-    "layer_norm",
-    "conv2d",
-    "transpose",
-    "reshape",
     // Phase 2 — video
     "yuv_to_rgb",
     "overlay_alpha",
@@ -282,6 +272,53 @@ fn decode_shape(term: Term) -> NifResult<Vec<usize>> {
     Ok(raw)
 }
 
+fn validate_f32_buffers(
+    kernel: &str,
+    inputs: &[ResourceArc<Buffer>],
+    output: &ResourceArc<Buffer>,
+    expected_inputs: usize,
+) -> NifResult<()> {
+    if inputs.len() < expected_inputs {
+        return Err(Error::RaiseTerm(Box::new(format!(
+            "{}: expected {} inputs, got {}",
+            kernel,
+            expected_inputs,
+            inputs.len()
+        ))));
+    }
+
+    for (idx, input) in inputs.iter().enumerate() {
+        if input.dtype != DType::F32 {
+            return Err(Error::RaiseTerm(Box::new(format!(
+                "{}: input {} must be f32, got {}",
+                kernel,
+                idx,
+                input.dtype.as_str()
+            ))));
+        }
+    }
+
+    if output.dtype != DType::F32 {
+        return Err(Error::RaiseTerm(Box::new(format!(
+            "{}: output must be f32, got {}",
+            kernel,
+            output.dtype.as_str()
+        ))));
+    }
+
+    if !inputs
+        .iter()
+        .all(|input| input.data().len() == output.data().len())
+    {
+        return Err(Error::RaiseTerm(Box::new(format!(
+            "{}: all input buffers must match output byte size",
+            kernel
+        ))));
+    }
+
+    Ok(())
+}
+
 // ── NIF: Device management ───────────────────────────────────
 
 #[rustler::nif]
@@ -289,7 +326,7 @@ fn device_info(env: Env) -> NifResult<Term> {
     let map = rustler::types::map::map_new(env);
     let map = map.map_put(
         atoms::device_name().encode(env),
-        "CubeCL GPU (Phase 2 — media extensions)".encode(env),
+        "CubeCL GPU (CPU fallback — v0.5.0)".encode(env),
     )?;
     let map = map.map_put(atoms::device_type().encode(env), "gpu".encode(env))?;
     let map = map.map_put(
@@ -367,6 +404,71 @@ fn buffer_dtype(env: Env, buffer: ResourceArc<Buffer>) -> NifResult<Term> {
 
 // ── NIF: Kernel execution ────────────────────────────────────
 
+/// Execute a kernel by name with given inputs, output, and JSON params.
+/// Returns Ok(()) on success, or Err with a message on failure.
+fn execute_kernel(
+    name: &str,
+    inputs: &[ResourceArc<Buffer>],
+    output: &ResourceArc<Buffer>,
+    params_json: &serde_json::Value,
+) -> Result<(), String> {
+    match name {
+        "elementwise_add" => kernel_elementwise_add(inputs, output).map_err(|e| format!("{:?}", e)),
+        "elementwise_mul" => kernel_elementwise_mul(inputs, output).map_err(|e| format!("{:?}", e)),
+        "elementwise_sub" => kernel_elementwise_sub(inputs, output).map_err(|e| format!("{:?}", e)),
+        "elementwise_div" => kernel_elementwise_div(inputs, output).map_err(|e| format!("{:?}", e)),
+        "relu" => kernel_relu(inputs, output).map_err(|e| format!("{:?}", e)),
+        "sigmoid" => kernel_sigmoid(inputs, output).map_err(|e| format!("{:?}", e)),
+        "tanh" => kernel_tanh(inputs, output).map_err(|e| format!("{:?}", e)),
+        "yuv_to_rgb" => {
+            kernel_yuv_to_rgb(inputs, output, params_json).map_err(|e| format!("{:?}", e))
+        }
+        "overlay_alpha" => {
+            kernel_overlay_alpha(inputs, output, params_json).map_err(|e| format!("{:?}", e))
+        }
+        "video_mix" => {
+            kernel_video_mix(inputs, output, params_json).map_err(|e| format!("{:?}", e))
+        }
+        "gaussian_blur" => {
+            kernel_gaussian_blur(inputs, output, params_json).map_err(|e| format!("{:?}", e))
+        }
+        "bicubic_scale" => {
+            kernel_bicubic_scale(inputs, output, params_json).map_err(|e| format!("{:?}", e))
+        }
+        "lut_apply" => {
+            kernel_lut_apply(inputs, output, params_json).map_err(|e| format!("{:?}", e))
+        }
+        "chroma_key" => {
+            kernel_chroma_key(inputs, output, params_json).map_err(|e| format!("{:?}", e))
+        }
+        "sharpen" => kernel_sharpen(inputs, output, params_json).map_err(|e| format!("{:?}", e)),
+        "brightness_contrast" => {
+            kernel_brightness_contrast(inputs, output, params_json).map_err(|e| format!("{:?}", e))
+        }
+        "denoise" => kernel_denoise(inputs, output, params_json).map_err(|e| format!("{:?}", e)),
+        "video_crop" => {
+            kernel_video_crop(inputs, output, params_json).map_err(|e| format!("{:?}", e))
+        }
+        "pcm_mix" => kernel_pcm_mix(inputs, output, params_json).map_err(|e| format!("{:?}", e)),
+        "pcm_normalize" => {
+            kernel_pcm_normalize(inputs, output, params_json).map_err(|e| format!("{:?}", e))
+        }
+        "biquad_filter" => {
+            kernel_biquad_filter(inputs, output, params_json).map_err(|e| format!("{:?}", e))
+        }
+        "fft_convolve" => {
+            kernel_fft_convolve(inputs, output, params_json).map_err(|e| format!("{:?}", e))
+        }
+        "resample_linear" => {
+            kernel_resample_linear(inputs, output, params_json).map_err(|e| format!("{:?}", e))
+        }
+        "dynamics_compress" => {
+            kernel_dynamics_compress(inputs, output, params_json).map_err(|e| format!("{:?}", e))
+        }
+        other => Err(format!("unknown kernel '{}'", other)),
+    }
+}
+
 #[rustler::nif]
 fn kernel_run<'a>(
     env: Env<'a>,
@@ -379,7 +481,6 @@ fn kernel_run<'a>(
     let input_resources: Vec<ResourceArc<Buffer>> = inputs.decode()?;
 
     // Decode params from Erlang-term-encoded binary
-    // :erlang.term_to_binary(map) → env.binary_to_term → Term → serde_json::Value
     let params_json: serde_json::Value = match params.decode::<rustler::Binary>() {
         Ok(bin) => {
             let bytes = bin.as_slice();
@@ -402,51 +503,20 @@ fn kernel_run<'a>(
             .encode(env));
     }
 
-    // Execute the kernel on the CPU (simulating GPU execution).
-    // Each kernel receives the raw params Term and extracts what it needs.
-    match name_str.as_str() {
-        "elementwise_add" => kernel_elementwise_add(&input_resources, &output)?,
-        "elementwise_mul" => kernel_elementwise_mul(&input_resources, &output)?,
-        "elementwise_sub" => kernel_elementwise_sub(&input_resources, &output)?,
-        "elementwise_div" => kernel_elementwise_div(&input_resources, &output)?,
-        "relu" => kernel_relu(&input_resources, &output)?,
-        "sigmoid" => kernel_sigmoid(&input_resources, &output)?,
-        "tanh" => kernel_tanh(&input_resources, &output)?,
-        "yuv_to_rgb" => kernel_yuv_to_rgb(&input_resources, &output, &params_json)?,
-        "overlay_alpha" => kernel_overlay_alpha(&input_resources, &output, &params_json)?,
-        "video_mix" => kernel_video_mix(&input_resources, &output, &params_json)?,
-        "gaussian_blur" => kernel_gaussian_blur(&input_resources, &output, &params_json)?,
-        "bicubic_scale" => kernel_bicubic_scale(&input_resources, &output, &params_json)?,
-        "lut_apply" => kernel_lut_apply(&input_resources, &output, &params_json)?,
-        "chroma_key" => kernel_chroma_key(&input_resources, &output, &params_json)?,
-        "sharpen" => kernel_sharpen(&input_resources, &output, &params_json)?,
-        "brightness_contrast" => {
-            kernel_brightness_contrast(&input_resources, &output, &params_json)?
+    match execute_kernel(&name_str, &input_resources, &output, &params_json) {
+        Ok(()) => {
+            let cmd_id = alloc_id(&NEXT_COMMAND_ID);
+            COMMANDS.insert(
+                cmd_id,
+                Command {
+                    id: cmd_id,
+                    status: CommandStatus::Completed,
+                },
+            );
+            Ok((atoms::ok(), cmd_id).encode(env))
         }
-        "denoise" => kernel_denoise(&input_resources, &output, &params_json)?,
-        "video_crop" => kernel_video_crop(&input_resources, &output, &params_json)?,
-        "pcm_mix" => kernel_pcm_mix(&input_resources, &output, &params_json)?,
-        "pcm_normalize" => kernel_pcm_normalize(&input_resources, &output, &params_json)?,
-        "biquad_filter" => kernel_biquad_filter(&input_resources, &output, &params_json)?,
-        "fft_convolve" => kernel_fft_convolve(&input_resources, &output, &params_json)?,
-        "resample_linear" => kernel_resample_linear(&input_resources, &output, &params_json)?,
-        "dynamics_compress" => kernel_dynamics_compress(&input_resources, &output, &params_json)?,
-        // ── Unknown but declared kernels ────────────────────
-        other => {
-            let _ = (input_resources, output, other);
-        }
+        Err(msg) => Ok((atoms::error(), msg).encode(env)),
     }
-
-    let cmd_id = alloc_id(&NEXT_COMMAND_ID);
-    COMMANDS.insert(
-        cmd_id,
-        Command {
-            id: cmd_id,
-            status: CommandStatus::Completed,
-        },
-    );
-
-    Ok((atoms::ok(), cmd_id).encode(env))
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -459,19 +529,8 @@ fn kernel_elementwise_add(
     inputs: &[ResourceArc<Buffer>],
     output: &ResourceArc<Buffer>,
 ) -> NifResult<()> {
-    if inputs.len() < 2 {
-        return Err(Error::RaiseTerm(Box::new(
-            "elementwise_add: expected 2 inputs",
-        )));
-    }
-    // Clone input data before locking output to avoid deadlock when
-    if inputs.len() < 2 {
-        return Err(Error::RaiseTerm(Box::new(
-            "elementwise_add: expected 2 inputs",
-        )));
-    }
-    // Clone input data to avoid deadlock when
-    // output is the same buffer as one of the inputs (in-place operation).
+    validate_f32_buffers("elementwise_add", inputs, output, 2)?;
+
     let a = inputs[0].data().clone();
     let b = inputs[1].data().clone();
     let mut out = output.data();
@@ -488,11 +547,8 @@ fn kernel_elementwise_mul(
     inputs: &[ResourceArc<Buffer>],
     output: &ResourceArc<Buffer>,
 ) -> NifResult<()> {
-    if inputs.len() < 2 {
-        return Err(Error::RaiseTerm(Box::new(
-            "elementwise_mul: expected 2 inputs",
-        )));
-    }
+    validate_f32_buffers("elementwise_mul", inputs, output, 2)?;
+
     let a = inputs[0].data().clone();
     let b = inputs[1].data().clone();
     let mut out = output.data();
@@ -509,11 +565,8 @@ fn kernel_elementwise_sub(
     inputs: &[ResourceArc<Buffer>],
     output: &ResourceArc<Buffer>,
 ) -> NifResult<()> {
-    if inputs.len() < 2 {
-        return Err(Error::RaiseTerm(Box::new(
-            "elementwise_sub: expected 2 inputs",
-        )));
-    }
+    validate_f32_buffers("elementwise_sub", inputs, output, 2)?;
+
     let a = inputs[0].data().clone();
     let b = inputs[1].data().clone();
     let mut out = output.data();
@@ -530,11 +583,8 @@ fn kernel_elementwise_div(
     inputs: &[ResourceArc<Buffer>],
     output: &ResourceArc<Buffer>,
 ) -> NifResult<()> {
-    if inputs.len() < 2 {
-        return Err(Error::RaiseTerm(Box::new(
-            "elementwise_div: expected 2 inputs",
-        )));
-    }
+    validate_f32_buffers("elementwise_div", inputs, output, 2)?;
+
     let a = inputs[0].data().clone();
     let b = inputs[1].data().clone();
     let mut out = output.data();
@@ -548,6 +598,8 @@ fn kernel_elementwise_div(
 }
 
 fn kernel_relu(inputs: &[ResourceArc<Buffer>], output: &ResourceArc<Buffer>) -> NifResult<()> {
+    validate_f32_buffers("relu", inputs, output, 1)?;
+
     let a = inputs[0].data().clone();
     let mut out = output.data();
     let len = a.len().min(out.len());
@@ -559,6 +611,8 @@ fn kernel_relu(inputs: &[ResourceArc<Buffer>], output: &ResourceArc<Buffer>) -> 
 }
 
 fn kernel_sigmoid(inputs: &[ResourceArc<Buffer>], output: &ResourceArc<Buffer>) -> NifResult<()> {
+    validate_f32_buffers("sigmoid", inputs, output, 1)?;
+
     let a = inputs[0].data().clone();
     let mut out = output.data();
     let len = a.len().min(out.len());
@@ -571,6 +625,8 @@ fn kernel_sigmoid(inputs: &[ResourceArc<Buffer>], output: &ResourceArc<Buffer>) 
 }
 
 fn kernel_tanh(inputs: &[ResourceArc<Buffer>], output: &ResourceArc<Buffer>) -> NifResult<()> {
+    validate_f32_buffers("tanh", inputs, output, 1)?;
+
     let a = inputs[0].data().clone();
     let mut out = output.data();
     let len = a.len().min(out.len());
@@ -591,18 +647,32 @@ fn kernel_yuv_to_rgb(
     output: &ResourceArc<Buffer>,
     _params: &serde_json::Value,
 ) -> NifResult<()> {
+    if inputs.len() < 1 {
+        return Err(Error::RaiseTerm(Box::new("yuv_to_rgb: expected 1 input")));
+    }
     let input = inputs[0].data().clone();
+    if input.len() % 3 != 0 {
+        return Err(Error::RaiseTerm(Box::new(
+            "yuv_to_rgb: input length must be a multiple of 3 bytes",
+        )));
+    }
     let mut out = output.data();
     let total = input.len();
     let pixel_count = total * 2 / 3; // YUV420p: 1.5 bytes per pixel
     let rgb_bytes = pixel_count * 3;
 
-    // Clamp output to the smaller of the two buffers
-    let out_len = out.len().min(rgb_bytes);
+    if out.len() < rgb_bytes {
+        return Err(Error::RaiseTerm(Box::new(format!(
+            "yuv_to_rgb: output buffer too small, expected {} bytes, got {}",
+            rgb_bytes,
+            out.len()
+        ))));
+    }
+
     let y_plane_size = pixel_count;
     let uv_plane_size = pixel_count / 2;
 
-    for i in 0..out_len / 3 {
+    for i in 0..pixel_count {
         let y_val = if i < y_plane_size {
             input[i] as f32
         } else {
@@ -626,11 +696,9 @@ fn kernel_yuv_to_rgb(
         let b = (y_val + 1.772 * u_val).clamp(0.0, 255.0) as u8;
 
         let out_idx = i * 3;
-        if out_idx + 2 < out.len() {
-            out[out_idx] = r;
-            out[out_idx + 1] = g;
-            out[out_idx + 2] = b;
-        }
+        out[out_idx] = r;
+        out[out_idx + 1] = g;
+        out[out_idx + 2] = b;
     }
     Ok(())
 }
@@ -1336,10 +1404,12 @@ fn pipeline_add<'a>(
 ) -> NifResult<Term<'a>> {
     let name_str: String = name.decode()?;
     let input_resources: Vec<ResourceArc<Buffer>> = inputs.decode()?;
-    // Params are passed as an Elixir map — decode to validate
-    let _params_map: HashMap<String, Term<'a>> = params
-        .decode::<HashMap<String, Term<'a>>>()
-        .unwrap_or_default();
+
+    // Encode params as JSON bytes for storage
+    let params_bytes: Vec<u8> = match params.decode::<rustler::Binary>() {
+        Ok(bin) => bin.as_slice().to_vec(),
+        Err(_) => b"{}".to_vec(),
+    };
 
     match PIPELINES.get_mut(&pipeline_id) {
         Some(mut pipeline) => {
@@ -1347,7 +1417,7 @@ fn pipeline_add<'a>(
                 name: name_str,
                 inputs: input_resources,
                 output,
-                params: vec![],
+                params: params_bytes,
             });
             Ok((atoms::ok()).encode(env))
         }
@@ -1378,9 +1448,9 @@ fn pipeline_run(env: Env, pipeline_id: u64) -> NifResult<Term> {
         match cmd {
             PipelineCommand::KernelRun {
                 name,
-                inputs: _inputs,
-                output: _output,
-                params: _params,
+                inputs,
+                output,
+                params,
             } => {
                 if !AVAILABLE_KERNELS.contains(&name.as_str()) {
                     return Ok((
@@ -1390,16 +1460,32 @@ fn pipeline_run(env: Env, pipeline_id: u64) -> NifResult<Term> {
                         .encode(env));
                 }
 
-                let cmd_id = alloc_id(&NEXT_COMMAND_ID);
-                COMMANDS.insert(
-                    cmd_id,
-                    Command {
-                        id: cmd_id,
-                        status: CommandStatus::Completed,
-                    },
-                );
+                // Decode params from stored JSON bytes
+                let params_json: serde_json::Value = if params.is_empty() {
+                    serde_json::Value::Object(serde_json::Map::new())
+                } else {
+                    let json_str = std::str::from_utf8(params).unwrap_or("{}");
+                    serde_json::from_str(json_str)
+                        .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()))
+                };
 
-                cmd_ids.push(cmd_id);
+                // Execute the kernel
+                match execute_kernel(name, inputs, output, &params_json) {
+                    Ok(()) => {
+                        let cmd_id = alloc_id(&NEXT_COMMAND_ID);
+                        COMMANDS.insert(
+                            cmd_id,
+                            Command {
+                                id: cmd_id,
+                                status: CommandStatus::Completed,
+                            },
+                        );
+                        cmd_ids.push(cmd_id);
+                    }
+                    Err(msg) => {
+                        return Ok((atoms::error(), msg).encode(env));
+                    }
+                }
             }
             PipelineCommand::ReadFrame { .. } => {
                 let cmd_id = alloc_id(&NEXT_COMMAND_ID);
@@ -1412,7 +1498,12 @@ fn pipeline_run(env: Env, pipeline_id: u64) -> NifResult<Term> {
                 );
                 cmd_ids.push(cmd_id);
             }
-            PipelineCommand::Filter { kernel, .. } => {
+            PipelineCommand::Filter {
+                kernel,
+                input,
+                output,
+                params,
+            } => {
                 if !AVAILABLE_KERNELS.contains(&kernel.as_str()) {
                     return Ok((
                         atoms::error(),
@@ -1420,26 +1511,67 @@ fn pipeline_run(env: Env, pipeline_id: u64) -> NifResult<Term> {
                     )
                         .encode(env));
                 }
-                let cmd_id = alloc_id(&NEXT_COMMAND_ID);
-                COMMANDS.insert(
-                    cmd_id,
-                    Command {
-                        id: cmd_id,
-                        status: CommandStatus::Completed,
-                    },
-                );
-                cmd_ids.push(cmd_id);
+
+                let params_json: serde_json::Value = if params.is_empty() {
+                    serde_json::Value::Object(serde_json::Map::new())
+                } else {
+                    let json_str = std::str::from_utf8(params).unwrap_or("{}");
+                    serde_json::from_str(json_str)
+                        .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()))
+                };
+
+                match execute_kernel(kernel, &[input.clone()], output, &params_json) {
+                    Ok(()) => {
+                        let cmd_id = alloc_id(&NEXT_COMMAND_ID);
+                        COMMANDS.insert(
+                            cmd_id,
+                            Command {
+                                id: cmd_id,
+                                status: CommandStatus::Completed,
+                            },
+                        );
+                        cmd_ids.push(cmd_id);
+                    }
+                    Err(msg) => {
+                        return Ok((atoms::error(), msg).encode(env));
+                    }
+                }
             }
-            PipelineCommand::Overlay { .. } => {
-                let cmd_id = alloc_id(&NEXT_COMMAND_ID);
-                COMMANDS.insert(
-                    cmd_id,
-                    Command {
-                        id: cmd_id,
-                        status: CommandStatus::Completed,
-                    },
-                );
-                cmd_ids.push(cmd_id);
+            PipelineCommand::Overlay {
+                base,
+                layer,
+                output,
+                params,
+            } => {
+                let params_json: serde_json::Value = if params.is_empty() {
+                    serde_json::Value::Object(serde_json::Map::new())
+                } else {
+                    let json_str = std::str::from_utf8(params).unwrap_or("{}");
+                    serde_json::from_str(json_str)
+                        .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()))
+                };
+
+                match execute_kernel(
+                    "overlay_alpha",
+                    &[base.clone(), layer.clone()],
+                    output,
+                    &params_json,
+                ) {
+                    Ok(()) => {
+                        let cmd_id = alloc_id(&NEXT_COMMAND_ID);
+                        COMMANDS.insert(
+                            cmd_id,
+                            Command {
+                                id: cmd_id,
+                                status: CommandStatus::Completed,
+                            },
+                        );
+                        cmd_ids.push(cmd_id);
+                    }
+                    Err(msg) => {
+                        return Ok((atoms::error(), msg).encode(env));
+                    }
+                }
             }
             PipelineCommand::Encode { .. } => {
                 let cmd_id = alloc_id(&NEXT_COMMAND_ID);
@@ -1552,3 +1684,79 @@ fn transcode_finish(env: Env, encoder: ResourceArc<media::Transcoder>) -> NifRes
 }
 
 rustler::init!("Elixir.ExCubecl.NIF", load = on_load);
+
+// ── Unit tests ──────────────────────────────────────────────
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dtype_size_in_bytes() {
+        assert_eq!(DType::F32.size_in_bytes(), 4);
+        assert_eq!(DType::F64.size_in_bytes(), 8);
+        assert_eq!(DType::S32.size_in_bytes(), 4);
+        assert_eq!(DType::S64.size_in_bytes(), 8);
+        assert_eq!(DType::U32.size_in_bytes(), 4);
+        assert_eq!(DType::U8.size_in_bytes(), 1);
+    }
+
+    #[test]
+    fn dtype_as_str() {
+        assert_eq!(DType::F32.as_str(), "f32");
+        assert_eq!(DType::F64.as_str(), "f64");
+        assert_eq!(DType::U8.as_str(), "u8");
+    }
+
+    #[test]
+    fn dtype_from_str_valid() {
+        assert_eq!(DType::from_str("f32"), Some(DType::F32));
+        assert_eq!(DType::from_str("f64"), Some(DType::F64));
+        assert_eq!(DType::from_str("s32"), Some(DType::S32));
+        assert_eq!(DType::from_str("s64"), Some(DType::S64));
+        assert_eq!(DType::from_str("u32"), Some(DType::U32));
+        assert_eq!(DType::from_str("u8"), Some(DType::U8));
+    }
+
+    #[test]
+    fn dtype_from_str_invalid() {
+        assert_eq!(DType::from_str("f16"), None);
+        assert_eq!(DType::from_str(""), None);
+        assert_eq!(DType::from_str("invalid"), None);
+    }
+
+    #[test]
+    fn available_kernels_contains_core() {
+        assert!(AVAILABLE_KERNELS.contains(&"elementwise_add"));
+        assert!(AVAILABLE_KERNELS.contains(&"relu"));
+        assert!(AVAILABLE_KERNELS.contains(&"yuv_to_rgb"));
+        assert!(AVAILABLE_KERNELS.contains(&"pcm_mix"));
+    }
+
+    #[test]
+    fn available_kernels_count() {
+        // 9 compute + 11 video + 6 audio = 26
+        assert_eq!(AVAILABLE_KERNELS.len(), 26);
+    }
+
+    #[test]
+    fn command_status_roundtrip() {
+        let pending = CommandStatus::Pending;
+        let running = CommandStatus::Running;
+        let completed = CommandStatus::Completed;
+        let failed = CommandStatus::Failed("test error".to_string());
+
+        assert_eq!(pending, CommandStatus::Pending);
+        assert_eq!(running, CommandStatus::Running);
+        assert_eq!(completed, CommandStatus::Completed);
+        assert_eq!(failed, CommandStatus::Failed("test error".to_string()));
+    }
+
+    #[test]
+    fn alloc_id_increments() {
+        let counter = std::sync::atomic::AtomicU64::new(1);
+        let id1 = alloc_id(&counter);
+        let id2 = alloc_id(&counter);
+        assert_eq!(id1, 1);
+        assert_eq!(id2, 2);
+    }
+}

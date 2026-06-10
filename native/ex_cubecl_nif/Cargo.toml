@@ -1,6 +1,6 @@
 [package]
 name = "ex_cubecl_nif"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "GPU compute runtime for CubeCL via Rust NIFs — media processing extension"
@@ -32,10 +32,12 @@ serde_json = "1"
 # rubato = "0.16"
 
 [features]
-default = ["wgpu"]
-wgpu = []
-cuda = []
-metal = []
-rocm = []
+default = ["cpu"]
+cpu = []
+gpu = []
+wgpu = ["gpu"]
+cuda = ["gpu"]
+metal = ["gpu"]
+rocm = ["gpu"]
 
 [workspace]

@@ -1,12 +1,12 @@
 # Video Processing Guide
 
-Complete reference for GPU-accelerated video operations in ExCubecl.
+Complete reference for video processing operations in ExCubecl. Video operations are implemented in the Rust NIF.
 
 ## VideoFrame Struct
 
 ```elixir
 %ExCubecl.VideoFrame{
-  handle:   #Reference<...>,   # GPU buffer
+  handle:   #Reference<...>,   # Rust NIF-managed CPU-side resource
   width:    1920,
   height:   1080,
   format:   :yuv420p,          # :yuv420p | :rgb24 | :rgba | :nv12
@@ -25,7 +25,7 @@ Complete reference for GPU-accelerated video operations in ExCubecl.
 {:ok, rgb} = ExCubecl.Video.convert(nv12_frame, :nv12, :rgb24)
 ```
 
-The `yuv_to_rgb` kernel runs entirely on the GPU. No CPU readback needed.
+The `yuv_to_rgb` kernel is implemented in the NIF.
 
 ## Overlay (Alpha Composite)
 
@@ -37,7 +37,7 @@ The `yuv_to_rgb` kernel runs entirely on the GPU. No CPU readback needed.
 {:ok, result} = ExCubecl.Video.overlay(base, overlay, x: 100, y: 50, alpha: 0.8)
 ```
 
-Uses Porter-Duff Over compositing on the GPU.
+Uses Porter-Duff Over compositing.
 
 ## Mix / Blend
 
@@ -62,7 +62,7 @@ Uses Porter-Duff Over compositing on the GPU.
 {:ok, scaled} = ExCubecl.Video.scale(frame, width: 3840, height: 2160)
 ```
 
-Uses bicubic interpolation on the GPU for high-quality results.
+Uses nearest-neighbor resampling in the current implementation.
 
 ## Crop
 
@@ -71,7 +71,7 @@ Uses bicubic interpolation on the GPU for high-quality results.
 {:ok, cropped} = ExCubecl.Video.crop(frame, x: 100, y: 100, width: 640, height: 480)
 ```
 
-## GPU Filters
+## Video Filters
 
 ```elixir
 # Gaussian blur
@@ -109,14 +109,13 @@ Uses bicubic interpolation on the GPU for high-quality results.
 ## Snapshot
 
 ```elixir
-# Save frame to PNG (triggers GPU→CPU readback)
+# Save frame to PNG from CPU-side resource data
 :ok = ExCubecl.Video.snapshot(frame, "thumb.png")
 ```
 
-Note: Snapshots involve a GPU→CPU readback and should be used sparingly in
-performance-critical paths.
+Note: Snapshots read buffer data from the NIF.
 
-## Pipeline Integration
+Pipeline integration example using NIF-backed operations:
 
 ```elixir
 {:ok, src} = ExCubecl.Media.open("input.mp4")

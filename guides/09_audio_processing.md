@@ -1,12 +1,12 @@
 # Audio Processing Guide
 
-Complete reference for GPU-accelerated audio operations in ExCubecl.
+Complete reference for audio processing operations in ExCubecl. Audio operations are implemented in the Rust NIF.
 
 ## AudioSamples Struct
 
 ```elixir
 %ExCubecl.AudioSamples{
-  handle:      #Reference<...>,   # GPU buffer (f32 planar PCM)
+  handle:      #Reference<...>,   # Rust NIF-managed CPU-side resource (f32 planar PCM)
   channels:    2,
   sample_rate: 48000,
   frames:      1024,              # samples per channel
@@ -30,7 +30,7 @@ Complete reference for GPU-accelerated audio operations in ExCubecl.
 )
 ```
 
-The `pcm_mix` kernel sums N tracks with per-channel gain on the GPU.
+The `pcm_mix` kernel is implemented in the NIF.
 
 ## Overlay with Ducking
 
@@ -52,8 +52,8 @@ The `pcm_mix` kernel sums N tracks with per-channel gain on the GPU.
 {:ok, resampled} = ExCubecl.Audio.resample(samples, from: 48000, to: 44100)
 ```
 
-Uses GPU-accelerated linear interpolation. For higher quality, use the
-`biquad_filter` kernel for band-limited resampling.
+Uses linear interpolation in the current implementation. For higher quality, use the
+`biquad_filter` API.
 
 ## Channel Conversion
 
@@ -67,7 +67,7 @@ Uses GPU-accelerated linear interpolation. For higher quality, use the
 # Supported layouts: :mono, :stereo, :surround_51, :surround_71
 ```
 
-## GPU Audio Filters
+## Audio Filters
 
 ```elixir
 # EQ (via biquad filter)
@@ -96,7 +96,7 @@ Uses GPU-accelerated linear interpolation. For higher quality, use the
 ])
 ```
 
-## Pipeline Integration
+Pipeline integration example using NIF-backed operations:
 
 ```elixir
 {:ok, track_a} = ExCubecl.AudioSamples.from_map(audio_map_a)

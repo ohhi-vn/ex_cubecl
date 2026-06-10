@@ -1,6 +1,6 @@
 # Mobile Integration
 
-ExCubecl includes a C FFI layer for iOS and Android integration.
+ExCubecl includes a C header that sketches an iOS and Android integration API. The header is an interface prototype for native mobile integration.
 
 ## iOS (Objective-C / Swift)
 
@@ -71,20 +71,20 @@ Java_com_example_excubecl_ExCubeclBuffer_create(
 }
 ```
 
-## Mobile GPU Pipeline
+## Mobile Pipeline Prototype
 
 ```
 Camera Frame
     ↓
-GPU Texture (via C FFI)
+Buffer/texture (via C header prototype)
     ↓
-CubeCL Kernel (blur / edge detect / AI)
+Kernel/filter
     ↓
 Screen Render / Encoder
 ```
 
-All without CPU copies — critical for realtime mobile performance.
+This guide shows how a mobile app could integrate with the API shape.
 
 ## Thread Safety
 
-The C FFI uses thread-local storage. Buffers are only valid on the thread that created them. For multi-threaded mobile apps, create buffers on the thread that will use them.
+The C header prototype is not currently used by the Elixir runtime. Treat it as documentation for a future native integration boundary; current buffers are Rust NIF-managed resources.

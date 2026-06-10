@@ -78,15 +78,17 @@ defmodule ExCubecl.Video do
   """
   @spec scale(frame(), keyword()) :: {:ok, frame()} | {:error, term()}
   def scale(%VideoFrame{} = frame, opts) do
-    width = Keyword.fetch!(opts, :width)
-    height = Keyword.fetch!(opts, :height)
+    with {:ok, width, height} <- fetch_dimensions(opts),
+         {:ok, output_handle} <- allocate_video_buffer(width, height, frame.format) do
+      params = %{width: width, height: height}
 
-    params = %{width: width, height: height}
-    result = NIF.kernel_run("bicubic_scale", [frame.handle], frame.handle, params)
+      case ExCubecl.run_kernel("bicubic_scale", [frame.handle], output_handle, params) do
+        {:ok, _cmd_id} ->
+          {:ok, %VideoFrame{frame | handle: output_handle, width: width, height: height}}
 
-    case result do
-      {:ok, _cmd_id} -> {:ok, %VideoFrame{frame | width: width, height: height}}
-      {:error, reason} -> {:error, reason}
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 
@@ -100,12 +102,21 @@ defmodule ExCubecl.Video do
   @spec convert(frame(), pixel_format(), pixel_format()) :: {:ok, frame()} | {:error, term()}
   def convert(%VideoFrame{} = frame, from_format, _to_format)
       when from_format in [:yuv420p, :nv12] do
-    params = %{from: from_format, to: :rgb24}
-    result = NIF.kernel_run("yuv_to_rgb", [frame.handle], frame.handle, params)
+    # YUV420p uses 1.5 bytes/pixel; RGB24 uses 3 bytes/pixel.
+    # Allocate a new output buffer with the correct size for RGB.
+    rgb_bytes = frame.width * frame.height * 3
+    output_data = :binary.copy(<<0::unsigned-8>>, rgb_bytes)
 
-    case result do
-      {:ok, _cmd_id} -> {:ok, %VideoFrame{frame | format: :rgb24}}
-      {:error, reason} -> {:error, reason}
+    with {:ok, output_handle} <- ExCubecl.buffer(output_data, [rgb_bytes], :u8) do
+      params = %{from: from_format, to: :rgb24}
+
+      case NIF.kernel_run("yuv_to_rgb", [frame.handle], output_handle, params) do
+        {:ok, _cmd_id} ->
+          {:ok, %VideoFrame{frame | handle: output_handle, format: :rgb24}}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 
@@ -125,17 +136,18 @@ defmodule ExCubecl.Video do
   """
   @spec crop(frame(), keyword()) :: {:ok, frame()} | {:error, term()}
   def crop(%VideoFrame{} = frame, opts) do
-    x = Keyword.get(opts, :x, 0)
-    y = Keyword.get(opts, :y, 0)
-    width = Keyword.fetch!(opts, :width)
-    height = Keyword.fetch!(opts, :height)
+    with {:ok, x, y, width, height} <- fetch_crop_rect(opts),
+         :ok <- validate_crop_rect(frame, x, y, width, height),
+         {:ok, output_handle} <- allocate_video_buffer(width, height, frame.format) do
+      params = %{x: x, y: y, width: width, height: height}
 
-    params = %{x: x, y: y, width: width, height: height}
-    result = NIF.kernel_run("video_crop", [frame.handle], frame.handle, params)
+      case ExCubecl.run_kernel("video_crop", [frame.handle], output_handle, params) do
+        {:ok, _cmd_id} ->
+          {:ok, %VideoFrame{frame | handle: output_handle, width: width, height: height}}
 
-    case result do
-      {:ok, _cmd_id} -> {:ok, %VideoFrame{frame | width: width, height: height}}
-      {:error, reason} -> {:error, reason}
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 
@@ -153,5 +165,72 @@ defmodule ExCubecl.Video do
       {:ok, data} -> File.write(path, data)
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  # ── Private ─────────────────────────────────────────────────
+
+  defp fetch_dimensions(opts) do
+    with {:ok, width} <- fetch_option(opts, :width),
+         {:ok, height} <- fetch_option(opts, :height),
+         :ok <- validate_positive_dimension(:width, width),
+         :ok <- validate_positive_dimension(:height, height) do
+      {:ok, width, height}
+    end
+  end
+
+  defp fetch_crop_rect(opts) do
+    x = Keyword.get(opts, :x, 0)
+    y = Keyword.get(opts, :y, 0)
+
+    with {:ok, width} <- fetch_option(opts, :width),
+         {:ok, height} <- fetch_option(opts, :height),
+         :ok <- validate_non_negative_offset(:x, x),
+         :ok <- validate_non_negative_offset(:y, y),
+         :ok <- validate_positive_dimension(:width, width),
+         :ok <- validate_positive_dimension(:height, height) do
+      {:ok, x, y, width, height}
+    end
+  end
+
+  defp fetch_option(opts, option) do
+    case Keyword.fetch(opts, option) do
+      {:ok, value} -> {:ok, value}
+      :error -> {:error, {:missing_option, option}}
+    end
+  end
+
+  defp validate_positive_dimension(_option, value) when is_integer(value) and value > 0, do: :ok
+
+  defp validate_positive_dimension(option, value),
+    do: {:error, {:invalid_dimension, option, value}}
+
+  defp validate_non_negative_offset(_option, value) when is_integer(value) and value >= 0, do: :ok
+
+  defp validate_non_negative_offset(option, value),
+    do: {:error, {:invalid_offset, option, value}}
+
+  defp validate_crop_rect(%VideoFrame{width: src_width, height: src_height}, x, y, width, height) do
+    if x + width <= src_width and y + height <= src_height do
+      :ok
+    else
+      {:error, {:crop_out_of_bounds, x, y, width, height, src_width, src_height}}
+    end
+  end
+
+  defp allocate_video_buffer(width, height, :yuv420p), do: allocate_yuv420p_buffer(width, height)
+  defp allocate_video_buffer(width, height, :rgb24), do: allocate_rgb_buffer(width, height, 3)
+  defp allocate_video_buffer(width, height, :rgba), do: allocate_rgb_buffer(width, height, 4)
+  defp allocate_video_buffer(width, height, :nv12), do: allocate_yuv420p_buffer(width, height)
+
+  defp allocate_yuv420p_buffer(width, height) do
+    bytes = div(width * height * 3, 2)
+    data = :binary.copy(<<0::unsigned-8>>, bytes)
+    ExCubecl.buffer(data, [bytes], :u8)
+  end
+
+  defp allocate_rgb_buffer(width, height, channels) do
+    bytes = width * height * channels
+    data = :binary.copy(<<0::unsigned-8>>, bytes)
+    ExCubecl.buffer(data, [bytes], :u8)
   end
 end

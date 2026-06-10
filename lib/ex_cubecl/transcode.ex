@@ -84,17 +84,16 @@ defmodule ExCubecl.Transcode do
     video_opts = Keyword.get(opts, :video, [])
     audio_opts = Keyword.get(opts, :audio, [])
 
-    validate_codec!(video_opts[:codec], @video_codecs, :video)
-    validate_codec!(audio_opts[:codec], @audio_codecs, :audio)
+    with :ok <- validate_codec(video_opts[:codec], @video_codecs, :video),
+         :ok <- validate_codec(audio_opts[:codec], @audio_codecs, :audio),
+         :ok <- validate_container(output_path) do
+      opts_map = %{
+        "video" => Map.new(video_opts),
+        "audio" => Map.new(audio_opts)
+      }
 
-    validate_container!(output_path)
-
-    opts_map = %{
-      "video" => Map.new(video_opts),
-      "audio" => Map.new(audio_opts)
-    }
-
-    NIF.transcode_start(output_path, opts_map)
+      NIF.transcode_start(output_path, opts_map)
+    end
   end
 
   @doc "Writes a video frame to the encoder."
@@ -119,6 +118,7 @@ defmodule ExCubecl.Transcode do
 
   defp transcode_loop(src, enc, max_frames \\ 100)
   defp transcode_loop(_src, _enc, 0), do: :ok
+
   defp transcode_loop(src, enc, remaining) do
     case ExCubecl.Media.read_frame(src, :video) do
       {:ok, frame} ->
@@ -137,27 +137,27 @@ defmodule ExCubecl.Transcode do
     end
   end
 
-  defp validate_codec!(nil, _allowed, _type), do: :ok
+  defp validate_codec(nil, _allowed, _type), do: :ok
 
-  defp validate_codec!(codec, allowed, type) when is_atom(codec) do
+  defp validate_codec(codec, allowed, type) when is_atom(codec) do
     codec_str = Atom.to_string(codec)
 
     if codec_str in allowed do
       :ok
     else
-      raise ArgumentError,
-            "unsupported #{type} codec: #{codec}. Supported: #{Enum.join(allowed, ", ")}"
+      {:error, {:unsupported_codec, type, codec, nil}}
     end
   end
 
-  defp validate_container!(path) do
+  defp validate_codec(codec, _allowed, type), do: {:error, {:invalid_codec, type, codec}}
+
+  defp validate_container(path) do
     ext = Path.extname(path) |> String.trim_leading(".")
 
     if ext in @containers do
       :ok
     else
-      raise ArgumentError,
-            "unsupported container: .#{ext}. Supported: #{Enum.join(@containers, ", ")}"
+      {:error, {:unsupported_container, ext, nil}}
     end
   end
 end

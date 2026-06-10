@@ -6,6 +6,15 @@
 
 It provides GPU buffer management, kernel execution, async command submission, and pipeline orchestration — designed for AI inference, media processing, and realtime GPU effects on mobile and desktop.
 
+## Current implementation status
+
+> **Note:** The current release (v0.5.0) includes a compiled Rust NIF with CPU-side kernel implementations. The architecture is designed to swap in GPU dispatch without changing the public Elixir API.
+
+- **NIF-backed kernels:** buffer operations, compute kernels, filters, audio/video operations, and pipelines execute via the compiled Rust NIF.
+- **Rust NIF-backed resource management:** buffers and other opaque resources are represented as Rustler resource references with automatic GC-based cleanup.
+- **Media modules:** `ExCubecl.Media`, `ExCubecl.Video`, `ExCubecl.Audio`, `ExCubecl.Filter`, and `ExCubecl.Transcode` provide video/audio I/O, filter operations, and transcoding lifecycle management via the NIF.
+- **24 kernels available:** elementwise operations, activations, video processing (overlay, mix, scale, crop, color conversion, filters), audio processing (mix, normalize, resample, channel conversion, EQ, compressor, reverb).
+
 ## Architecture
 
 ```
@@ -19,17 +28,15 @@ It provides GPU buffer management, kernel execution, async command submission, a
 │  - NIF function stubs                        │
 ├─────────────────────────────────────────────┤
 │           Rust NIF (lib.rs)                  │
-│  - GPU device management                     │
-│  - Buffer pool / Texture pool                │
-│  - Kernel cache                              │
+│  - Device management                         │
+│  - Buffer pool (ResourceArc)                 │
+│  - Kernel execution (24 kernels)             │
 │  - Async command queue                       │
-│  - Stream scheduler                          │
+│  - Media I/O & transcoding                   │
 ├─────────────────────────────────────────────┤
-│           CubeCL Runtime                     │
-│  - GPU kernel compilation                    │
-│  - Buffer management                         │
-│  - Dispatch execution                        │
-│  - Synchronization                           │
+│           C FFI (ex_cubecl.h)                │
+│  - Mobile platform interface                 │
+│  - iOS / Android interop                     │
 ├─────────────────────────────────────────────┤
 │           C FFI (ex_cubecl.h)                │
 │  - Mobile platform interface                 │
@@ -54,8 +61,7 @@ end
 ```elixir
 # Check device
 {:ok, info} = ExCubecl.device_info()
-# %{device_name: "CubeCL GPU (Phase 2 — media extensions, CPU simulation)", ...}
-# Note: Currently runs on CPU; GPU dispatch coming in a future release
+# %{device_name: "CubeCL GPU (CPU fallback — v0.5.0)", ...}
 
 # Create GPU buffers (returns resource references, not integer IDs)
 a = ExCubecl.buffer!([1.0, 2.0, 3.0], [3], :f32)
@@ -145,7 +151,7 @@ Java_com_example_excubecl_ExCubeclBuffer_create(
 }
 ```
 
-### Phase 2 — Video Texture & Audio Mix (C FFI)
+### Video Texture & Audio Mix (C FFI)
 
 ```c
 #include "ex_cubecl.h"
@@ -207,24 +213,23 @@ Virtual background, AR effects, realtime filters — all GPU-native.
 
 | Phase | Focus                          | Status        |
 |-------|--------------------------------|---------------|
-| 1     | GPU compute runtime            | ✅ Complete   |
-| 2     | Media runtime (video/camera)   | ✅ Complete   |
+| 1     | Compute runtime                | ✅ Complete |
+| 2     | Media runtime (video/camera)   | ✅ Complete |
 
-### Phase 1 — GPU Compute Runtime
+### Phase 1 — Compute Runtime
 - Buffer management with automatic GC-based cleanup (Rustler ResourceArc)
-- Kernel execution (`elementwise_add`, `relu`, and extensible kernel list)
+- Kernel execution: elementwise operations (add, mul, sub, div), activations (relu, sigmoid, tanh)
 - Async command submission with submit/poll/wait
-- Pipeline orchestration for chaining GPU operations
+- Pipeline orchestration for chaining operations
 - C FFI layer for mobile platform integration (iOS/Android)
 
-### Phase 2 — Media Runtime (current)
-- Media I/O: open, inspect streams, read video frames & audio samples, close — CPU-side implementation with synthetic data for testing
-- Video GPU operations: overlay (alpha compositing), mix (dissolve/add/multiply), scale, crop, pixel format conversion (YUV420p→RGB24) — all CPU-side implementations
-- Audio GPU operations: mix (multi-track with gain), overlay with ducking, resample (linear interpolation), channel conversion — all CPU-side implementations
-- GPU-accelerated filters: gaussian blur, sharpen, LUT color grading, chroma key, brightness/contrast, denoise, EQ (biquad), compressor, reverb (delay-based), normalize — all CPU-side implementations
-- Transcoding: encode & mux to mp4/mkv/webm/mov/ts with h264/h265/vp9/av1/prores video and aac/opus/mp3/flac/pcm audio — API stubs with validation
-- Real-time media pipeline (GenServer-based) for livestreaming and camera effects — behaviour with `__using__` macro
-- C FFI extensions: GPU texture upload (YUV420p/NV12), kernel application to textures, audio mix — full C header implementation with buffer management, kernel dispatch, and error handling
+### Phase 2 — Media Runtime
+- Media I/O: open, inspect streams, read video frames & audio samples, close
+- Video operations: overlay (alpha compositing), mix (dissolve/add/multiply), scale, crop, pixel format conversion (YUV420p→RGB24)
+- Audio operations: mix (multi-track with gain), overlay with ducking, resample (linear interpolation), channel conversion
+- Filters: gaussian blur, sharpen, LUT color grading, chroma key, brightness/contrast, denoise, EQ (biquad), compressor, reverb (delay-based), normalize
+- Transcoding: encode & mux to mp4/mkv/webm/mov/ts with h264/h265/vp9/av1/prores video and aac/opus/mp3/flac/pcm audio — validation and encoder lifecycle via NIF
+- Real-time media pipeline (GenServer-based) for livestreaming and camera effects
 
 ## License
 

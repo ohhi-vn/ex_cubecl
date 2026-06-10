@@ -1,8 +1,7 @@
 # Real-time Pipeline Guide
 
-Build real-time media processing pipelines using the `MediaPipeline` GenServer
-behaviour. Designed for livestreaming, camera effects, and other low-latency
-use cases.
+Build media processing pipelines using the `MediaPipeline` GenServer
+behaviour. The behaviour processes frames through NIF-backed filter and transcode operations.
 
 ## MediaPipeline Behaviour
 
@@ -150,21 +149,21 @@ ExCubecl.MediaPipeline.push_frame(:livestream, frame)
 
 ```
 ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│ Media Source  │────▶│ MediaPipeline │────▶│  Transcoder  │
-│ (FFmpeg)      │     │ (GenServer)   │     │  (FFmpeg)    │
+│ Media Source  │────▶│ MediaPipeline │────▶│ Encoder API  │
+│ (prototype)   │     │ (GenServer)   │     │ (stub)       │
 └──────────────┘     └──────────────┘     └──────────────┘
                            │
-                    ┌──────┴──────┐
-                    │  GPU Kernels │
-                    │  (CubeCL)    │
+                    ┌─────────────┐
+                    │ NIF-backed   │
+                    │ Operations   │
                     └─────────────┘
 ```
 
 ## Performance Tips
 
 1. **Batch frames**: Process multiple frames in `handle_frame` when possible.
-2. **Minimize readbacks**: Avoid `Video.snapshot/2` in the hot path.
-3. **Use filter chains**: `Filter.chain/2` is more efficient than individual `apply/2` calls.
+2. **Minimize readbacks**: Avoid `Video.snapshot/2` in hot paths where practical.
+3. **Use filter chains**: `Filter.chain/2` groups multiple filters into a single pipeline execution.
 4. **Pipeline mode**: For fixed processing graphs, use `ExCubecl.pipeline()` directly
    instead of the GenServer for lower overhead.
 

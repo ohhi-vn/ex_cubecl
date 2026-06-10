@@ -8,7 +8,7 @@ defmodule ExCubeclTest do
     end
 
     test "version matches mix.exs" do
-      assert ExCubecl.version() == "0.4.1"
+      assert ExCubecl.version() == "0.5.0"
     end
   end
 
@@ -628,6 +628,7 @@ defmodule ExCubeclTest do
       # Override format to :rgb24 and pass :rgb24 as from_format
       # which hits the unsupported conversion clause
       rgb_frame = %ExCubecl.VideoFrame{frame | format: :rgb24}
+
       assert {:error, {:unsupported_conversion, :rgb24}} =
                ExCubecl.Video.convert(rgb_frame, :rgb24, :yuv420p)
     end
@@ -719,21 +720,18 @@ defmodule ExCubeclTest do
     end
 
     test "start validates video codec" do
-      assert_raise ArgumentError, ~r/unsupported video codec/, fn ->
-        ExCubecl.Transcode.start("output.mp4", video: [codec: :invalid])
-      end
+      assert {:error, {:unsupported_codec, :video, :invalid, nil}} =
+               ExCubecl.Transcode.start("output.mp4", video: [codec: :invalid])
     end
 
     test "start validates audio codec" do
-      assert_raise ArgumentError, ~r/unsupported audio codec/, fn ->
-        ExCubecl.Transcode.start("output.mp4", audio: [codec: :invalid])
-      end
+      assert {:error, {:unsupported_codec, :audio, :invalid, nil}} =
+               ExCubecl.Transcode.start("output.mp4", audio: [codec: :invalid])
     end
 
     test "start validates container" do
-      assert_raise ArgumentError, ~r/unsupported container/, fn ->
-        ExCubecl.Transcode.start("output.avi", video: [codec: :h264])
-      end
+      assert {:error, {:unsupported_container, "avi", nil}} =
+               ExCubecl.Transcode.start("output.avi", video: [codec: :h264])
     end
 
     test "write_frame returns ok" do

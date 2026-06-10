@@ -1,29 +1,26 @@
 # Video Merge & Picture-in-Picture Guide
 
-Merge two or more video streams into a single output using GPU-accelerated
-compositing. This guide covers side-by-side, vertical split, and
-picture-in-Picture (PiP) layouts.
+Merge two or more video streams into a single output using the ExCubecl video API. This guide covers side-by-side, vertical split, and picture-in-Picture (PiP) layouts.
+
+> **Current status:** Compositing, scaling, and filter operations are implemented in the Rust NIF. Transcoding validates codec/container options and manages the encoder lifecycle.
 
 ## Overview
 
 ```
 ┌──────────────┐
 │  Stream A     │──┐
-│  (main)      │  │    ┌─────────────┐    ┌──────────────┐
-└──────────────┘  ├───▶│ GPU Compose  │───▶│  Encoder     │──▶ output.mp4
-┌──────────────┐  │    │ (overlay)    │    │  (FFmpeg)    │
-│  Stream B     │──┘    └─────────────┘    └──────────────┘
+│  (main)      │  │    ┌─────────────────┐    ┌────────────────┐
+└──────────────┘  ├───▶│ NIF-backed      │───▶│ Encoder        │──▶ output.mp4
+┌──────────────┐  │    │ Compositing     │    │ (NIF-backed)   │
+│  Stream B     │──┘    └─────────────────┘    └────────────────┘
 │  (PiP)       │
 └──────────────┘
 ```
 
-All compositing happens on the GPU via the `overlay_alpha` kernel. No CPU
-readback is needed until you optionally save a snapshot.
-
 ## Opening Multiple Sources
 
 ```elixir
-# Open two media sources (files, RTMP streams, cameras, etc.)
+# Open two media sources
 {:ok, src_a} = ExCubecl.Media.open("main_speaker.mp4")
 {:ok, src_b} = ExCubecl.Media.open("remote_guest.mp4")
 
@@ -92,14 +89,13 @@ defmodule PiPMerger do
       alpha: 1.0
     )
 
-    # Encode the merged frame
+    # Encode the composited frame
     :ok = ExCubecl.Transcode.write_frame(state.encoder, composited)
+        {:ok, state}
+      end
+    end
 
-    {:ok, state}
-  end
-end
-
-# Start the PiP merger
+    # Start the PiP merger
 {:ok, _pid} = PiPMerger.start_link(
   main: "speaker.mp4",
   overlay: "guest.mp4",
@@ -506,7 +502,7 @@ defmodule AudioVideoMerge do
 end
 ```
 
-## Complete End-to-End Example
+## End-to-End Example
 
 Merge two RTMP streams into a single PiP output:
 
@@ -640,9 +636,7 @@ if rem(state.frame_count, 300) == 0 do
 end
 ```
 
-> **Note**: `Video.snapshot/2` triggers a GPU→CPU readback. Use it sparingly
-> in performance-critical paths. For real-time previews, consider reducing the
-> resolution before snapshotting.
+> **Note**: `Video.snapshot/2` reads CPU-side resource data in the current implementation. Use it sparingly in performance-critical paths.
 
 ## Performance Tips
 
@@ -654,9 +648,9 @@ end
    skip the scale step entirely.
 
 3. **Use filter chains**: Combine scale + color correction in a single
-   `Filter.chain/2` call to minimize GPU kernel launches.
+   `Filter.chain/2` call to minimize overhead.
 
-4. **Avoid snapshots in the hot path**: GPU→CPU readbacks are expensive.
+4. **Avoid snapshots in the hot path**: CPU-side readbacks can still be expensive.
    Save thumbnails asynchronously or at low frequency.
 
 5. **Pipeline mode for fixed layouts**: If your merge layout doesn't change,

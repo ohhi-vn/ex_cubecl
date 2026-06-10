@@ -1,13 +1,13 @@
 # Async Execution & Pipelines
 
-## Async GPU Execution
+## Async Command-Style API
 
-ExCubecl supports non-blocking GPU command submission. This is critical for keeping the BEAM schedulers responsive.
+ExCubecl exposes non-blocking-style command APIs. Command state is managed in the Rust NIF with thread-pool-backed async execution.
 
 ### Submit → Poll → Wait
 
 ```elixir
-# Submit work, get a command ID immediately
+# Submit work, get a command ID immediately. The NIF spawns a thread for async execution.
 {:ok, cmd_id} = ExCubecl.submit("some_command")
 
 # Poll for status (non-blocking)
@@ -21,14 +21,14 @@ ExCubecl supports non-blocking GPU command submission. This is critical for keep
 ### Why Async Matters
 
 ```
-BEAM process → submit GPU command → return immediately
+BEAM process → submit command to NIF → return immediately
                                         ↓
-                              GPU processes work
+                              NIF thread pool executes
                                         ↓
-                              callback/event later
+                              command status updates
 ```
 
-You NEVER want the BEAM process waiting for GPU. This would block schedulers, cause latency spikes, and freeze the UI.
+You NEVER want the BEAM process waiting for long-running native work. This would block schedulers, cause latency spikes, and freeze the UI.
 
 ### Polling Pattern
 
@@ -47,10 +47,10 @@ result =
   end)
 ```
 
-### Parallel GPU Work
+### Parallel Async Work
 
 ```elixir
-# Submit multiple commands concurrently
+# Submit multiple command-style work items concurrently.
 {:ok, cmd_ids} =
   Enum.map(inputs, fn input ->
     {:ok, output} = ExCubecl.buffer(List.duplicate(0.0, 100), [100], :f32)
@@ -67,7 +67,7 @@ end
 
 ## Pipeline Orchestration
 
-Pipelines compose multiple GPU operations into a single executable graph.
+Pipelines compose multiple kernel operations into a single executable graph.
 
 ### Basic Pipeline
 
@@ -106,14 +106,14 @@ input buffer references, and output buffer reference.
 
 ### Combining Async and Pipelines
 
-Run an entire pipeline asynchronously:
+Run a pipeline:
 
 ```elixir
 {:ok, pipeline} = ExCubecl.pipeline()
 :ok = ExCubecl.pipeline_add(pipeline, "gaussian_blur", [buf_in], buf_blur)
 :ok = ExCubecl.pipeline_add(pipeline, "relu", [buf_blur], buf_out)
 
-# Run pipeline synchronously (pipelines are already sequential on the GPU)
+# Run pipeline through the NIF
 {:ok, _cmd_ids} = ExCubecl.pipeline_run(pipeline)
 :ok = ExCubecl.pipeline_free(pipeline)
 ```

@@ -180,12 +180,12 @@ defmodule ExCubeclEdgeCasesTest do
       assert v3 > 0.0 and v3 < 1.0
     end
 
-    test "kernel with insufficient inputs raises error" do
+    test "kernel with insufficient inputs returns error" do
       {:ok, input} = ExCubecl.buffer([1.0], [1], :f32)
       {:ok, output} = ExCubecl.buffer([0.0], [1], :f32)
-      assert_raise ErlangError, ~r/elementwise_add: expected 2 inputs/, fn ->
-        ExCubecl.run_kernel("elementwise_add", [input], output)
-      end
+
+      assert {:error, msg} = ExCubecl.run_kernel("elementwise_add", [input], output)
+      assert is_binary(msg)
     end
 
     test "unknown kernel returns error with kernel name" do
@@ -574,7 +574,10 @@ defmodule ExCubeclEdgeCasesTest do
     test "channels mono to stereo" do
       {:ok, src} = ExCubecl.Media.open("test.mp4")
       {:ok, samples} = ExCubecl.Media.read_frame(src, :audio)
-      {:ok, stereo} = ExCubecl.Audio.channels(samples, :mono, :stereo)
+      # Media file returns stereo samples (2 channels), convert to mono first
+      {:ok, mono} = ExCubecl.Audio.channels(samples, :stereo, :mono)
+      assert mono.channels == 1
+      {:ok, stereo} = ExCubecl.Audio.channels(mono, :mono, :stereo)
       assert stereo.channels == 2
     end
 
@@ -587,13 +590,12 @@ defmodule ExCubeclEdgeCasesTest do
       assert s71.channels == 8
     end
 
-    test "channels with unsupported layout raises" do
+    test "channels with unsupported layout returns error" do
       {:ok, src} = ExCubecl.Media.open("test.mp4")
       {:ok, samples} = ExCubecl.Media.read_frame(src, :audio)
 
-      assert_raise ArgumentError, fn ->
-        ExCubecl.Audio.channels(samples, :stereo, :unknown_layout)
-      end
+      assert {:error, {:unsupported_channel_layout, :unknown_layout}} =
+               ExCubecl.Audio.channels(samples, :stereo, :unknown_layout)
     end
   end
 
@@ -731,11 +733,9 @@ defmodule ExCubeclEdgeCasesTest do
       assert is_reference(enc)
     end
 
-    test "start with string codec raises FunctionClauseError" do
-      # validate_codec! only matches on atom codecs
-      assert_raise FunctionClauseError, fn ->
-        ExCubecl.Transcode.start("out.mp4", video: [codec: "h264"])
-      end
+    test "start with string codec returns error" do
+      assert {:error, {:invalid_codec, :video, "h264"}} =
+               ExCubecl.Transcode.start("out.mp4", video: [codec: "h264"])
     end
 
     test "write_frame then finish" do

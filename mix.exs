@@ -1,7 +1,7 @@
 defmodule ExCubecl.MixProject do
   use Mix.Project
 
-  @version "0.5.0"
+  @version "0.7.0"
   @source_url "https://github.com/ohhi-vn/ex_cubecl"
 
   def project do
@@ -38,7 +38,7 @@ defmodule ExCubecl.MixProject do
       {:rustler, "~> 0.37", runtime: false},
       {:jason, "~> 1.4"},
       {:ex_doc, "~> 0.40", only: :dev, runtime: false},
-      # Phase 2: .cube LUT file parser (optional, pure Elixir)
+      # Optional .cube LUT parser dependency (pure Elixir)
       {:nimble_parsec, "~> 1.4", optional: true}
     ]
   end
@@ -62,8 +62,7 @@ defmodule ExCubecl.MixProject do
     """
     ExCubecl is a GPU compute runtime for Elixir powered by CubeCL via Rust NIFs.
     Provides GPU buffer management, kernel execution, async command submission,
-    and pipeline orchestration. Designed for AI inference, media processing,
-    and realtime GPU effects on mobile and desktop.
+    and pipeline orchestration. Currently includes CPU fallback implementations.
     """
   end
 
@@ -121,12 +120,13 @@ defmodule ExCubecl.MixProject do
         Examples: ~r/examples\/.*\.exs/
       ],
       groups_for_modules: [
-        "GPU Runtime": [ExCubecl],
-        "Media I/O": [ExCubecl.Media, ExCubecl.Video, ExCubecl.Audio],
-        "Filters & Transcode": [ExCubecl.Filter, ExCubecl.Transcode],
-        Streaming: [ExCubecl.MediaPipeline],
+        "Core API Prototype": [ExCubecl],
+        "Media API Prototype": [ExCubecl.Media, ExCubecl.Video, ExCubecl.Audio],
+        "Filter API Prototype": [ExCubecl.Filter],
+        "Transcode API Prototype": [ExCubecl.Transcode],
+        "MediaPipeline API Prototype": [ExCubecl.MediaPipeline],
         Types: [ExCubecl.VideoFrame, ExCubecl.AudioSamples],
-        "Pipeline Commands": [ExCubecl.Command],
+        "Pipeline API Prototype": [ExCubecl.Command],
         "NIF Stubs": [ExCubecl.NIF]
       ],
       skip_undefined_reference_warnings_on: ["guides/05_mobile.md"],

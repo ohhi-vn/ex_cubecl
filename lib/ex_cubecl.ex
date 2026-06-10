@@ -60,7 +60,7 @@ defmodule ExCubecl do
   alias ExCubecl.NIF
   alias ExCubecl.Command
 
-  @version "0.4.1"
+  @version "0.5.0"
 
   @dtypes ~w(f32 f64 s32 s64 u32 u8)
 

@@ -1,6 +1,6 @@
 # Getting Started
 
-ExCubecl is a GPU compute runtime for Elixir. It provides GPU buffer management, kernel execution, async command submission, and pipeline orchestration via CubeCL (Rust NIFs).
+ExCubecl is a GPU compute runtime for Elixir, powered by CubeCL via Rust NIFs. The current release (v0.5.0) includes a compiled Rust NIF with CPU-side kernel implementations that simulate the CubeCL API surface.
 
 ## Installation
 
@@ -8,7 +8,7 @@ Add to your `mix.exs`:
 
 ```elixir
 def deps do
-  [{:ex_cubecl, "~> 0.4.0"}]
+  [{:ex_cubecl, "~> 0.5"}]
 end
 ```
 
@@ -17,16 +17,16 @@ Then run `mix deps.get`.
 ## Architecture
 
 ```
-Elixir → ExCubecl.NIF → Rust NIF → CubeCL Runtime
+Elixir → ExCubecl.NIF → Rust NIF → CPU-side kernel execution
 ```
 
-All GPU state lives in Rust — not in BEAM memory. The Elixir side manages handles, orchestrates pipelines, and schedules work.
+All resource state lives in Rust-managed memory via `ResourceArc`. The Elixir side manages handles, orchestrates pipelines, and exposes command-style APIs. Kernels execute CPU-side implementations of the CubeCL API surface. Media I/O, transcoding, and video/audio operations use a mix of NIF-backed implementations and Elixir-level validation.
 
 ## Core Concepts
 
 ### Buffers
 
-Buffers are the primary data structure, representing GPU memory holding typed, shaped data:
+Buffers are the primary data structure, representing typed, shaped data in CPU-side resource memory:
 
 ```elixir
 # Create a buffer from a list
@@ -45,7 +45,7 @@ Buffers are the primary data structure, representing GPU memory holding typed, s
 
 ### Kernels
 
-Kernels are GPU programs that operate on buffers:
+Kernels are exposed through the CubeCL-style API and execute CPU-side in the Rust NIF:
 
 ```elixir
 {:ok, input} = ExCubecl.buffer([1.0, 2.0, 3.0], [3], :f32)
@@ -56,7 +56,7 @@ Kernels are GPU programs that operate on buffers:
 
 ### Async Execution
 
-Submit work without blocking the BEAM:
+Submit command-style work without blocking the BEAM:
 
 ```elixir
 {:ok, cmd_id} = ExCubecl.submit("some_command")
@@ -70,7 +70,7 @@ Submit work without blocking the BEAM:
 
 ### Pipelines
 
-Compose multiple GPU operations into a single executable graph:
+Compose multiple kernel operations into a single executable graph:
 
 ```elixir
 {:ok, pipeline} = ExCubecl.pipeline()
@@ -97,15 +97,15 @@ Compose multiple GPU operations into a single executable graph:
 
 ```elixir
 ExCubecl.available?()    # true if NIF is loaded
-ExCubecl.version()       # "0.4.0"
-ExCubecl.device_info()   # %{device_name: "...", device_type: "gpu", ...}
-ExCubecl.device_count()  # 1
+ExCubecl.version()       # returns the ExCubecl module version (e.g. "0.5.0")
+ExCubecl.device_info()   # NIF device metadata (device_type: "gpu", total_memory, compute_units)
+ExCubecl.device_count()  # number of available devices
 ```
 
 ## Next Steps
 
 - [Buffer Management](02_buffers.md) — creating, reading, and inspecting buffers
-- [Kernel Execution](03_kernels.md) — running GPU kernels
-- [Async & Pipelines](04_async_pipelines.md) — non-blocking execution and pipeline orchestration
-- [Mobile Integration](05_mobile.md) — iOS/Android C FFI
-- [Examples](06_examples.md) — complete end-to-end examples
+- [Kernel Execution](03_kernels.md) — running kernels via the NIF
+- [Async & Pipelines](04_async_pipelines.md) — command-style APIs and pipeline orchestration
+- [Mobile Integration](05_mobile.md) — iOS/Android C header prototype
+- [Examples](06_examples.md) — API examples

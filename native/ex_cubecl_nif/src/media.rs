@@ -307,7 +307,7 @@ pub fn nif_transcode_write_video(
     _encoder: ResourceArc<Transcoder>,
     _frame: ResourceArc<crate::Buffer>,
 ) -> NifResult<Term> {
-    // Phase 2 stub: no-op. TODO: GPU buffer download → FFmpeg encode → mux.
+    // Phase 2 stub: no-op. TODO: CPU buffer download → FFmpeg encode → mux.
     Ok((atoms::ok()).encode(env))
 }
 
@@ -318,7 +318,7 @@ pub fn nif_transcode_write_audio(
     _encoder: ResourceArc<Transcoder>,
     _samples: ResourceArc<crate::Buffer>,
 ) -> NifResult<Term> {
-    // Phase 2 stub: no-op. TODO: GPU buffer download → FFmpeg encode → mux.
+    // Phase 2 stub: no-op. TODO: CPU buffer download → FFmpeg encode → mux.
     Ok((atoms::ok()).encode(env))
 }
 

@@ -1,6 +1,6 @@
 # Buffer Management
 
-Buffers are GPU memory regions managed via Rustler `ResourceArc` references. When the Elixir term holding a buffer is garbage collected, the underlying GPU memory is automatically freed.
+Buffers are typed, shaped data regions managed via Rustler `ResourceArc` references. The compiled Rust NIF manages buffer data in CPU memory. When the Elixir term holding a buffer is garbage collected, the underlying resource is automatically freed.
 
 ## Creating Buffers
 
@@ -47,7 +47,7 @@ data = ExCubecl.read!(buf)
 
 Buffers are managed via Rustler's `ResourceArc` mechanism. When the Elixir
 term holding a buffer reference is garbage collected, Rust's `Drop` is
-automatically called to free the underlying GPU memory. **No manual `ExCubecl.free/1`
+automatically called to free the underlying CPU-side resource memory. **No manual `ExCubecl.free/1`
 call is needed or available** — the old `free/1` function has been removed in
 favor of automatic cleanup.
 
@@ -61,5 +61,5 @@ data = ExCubecl.read!(buf)
 
 Internally, buffers are Rustler resource references (`ResourceArc<Buffer>`)
 managed by the Rust NIF layer. The Elixir side holds an opaque reference term.
-All data lives in Rust memory, not in the BEAM heap. Memory is automatically
+All data lives in Rust-managed CPU memory, not in the BEAM heap. Memory is automatically
 released when the reference is garbage collected by the BEAM.

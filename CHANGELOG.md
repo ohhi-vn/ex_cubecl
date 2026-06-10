@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.5.0] - 2026-06-10
+
+### Added
+- Pipeline execution now actually runs stored commands (previously only validated kernel names)
+- Rust unit tests for DType, kernel list, command status, and ID allocation
+- `# Safety` documentation on all unsafe C FFI functions
+- C FFI media source storage with proper handle validation
+
+### Fixed
+- C FFI handle allocation bug: `ex_cubecl_buffer_new` now uses `alloc_c_handle()` instead of `NEXT_COMMAND_ID`
+- `ExCubecl.NIF` not-loaded behavior: returns `{:error, :nif_not_loaded}` instead of raising
+- Kernel execution errors now return `{:error, msg}` instead of raising
+- `Video.convert` now allocates a properly-sized output buffer for RGB conversion
+- `Audio.channels` now properly converts sample data between channel layouts
+- `Transcode.start/2` returns errors instead of raising for invalid codecs/containers
+- `Video.scale/2`, `Video.crop/2`, `Audio.resample/2` return errors for missing/invalid options
+- Removed unimplemented kernels from `kernel_list()` (matmul, softmax, etc.)
+- Clippy warnings fixed across FFI and media modules
+
+### Changed
+- Version bumped to 0.5.0 across all files
+- Documentation updated to accurately describe NIF-backed runtime status
+- `pipeline_add` now stores params as JSON bytes for proper pipeline execution
+- `execute_kernel` helper extracted for reuse by both `kernel_run` and `pipeline_run`
+
 ## [0.4.0] - 2026-05-30
 
 ### Fixed

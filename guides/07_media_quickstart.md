@@ -1,17 +1,15 @@
 # Media Quickstart
 
-ExCubecl Phase 2 adds GPU-accelerated media processing: video/audio I/O,
-GPU filters, transcoding, and real-time streaming pipelines.
+ExCubecl's media modules provide video/audio I/O, filters, transcoding validation, and streaming pipeline APIs. In v0.5.0, media I/O and filter operations are implemented in the Rust NIF, while transcoding provides validation and encoder lifecycle management.
 
 ## Prerequisites
 
 - ExCubecl v0.5.0+
-- FFmpeg ≥ 6.x libraries (optional, for real media I/O)
-  - macOS: `brew install ffmpeg`
-  - Ubuntu: `apt install libavcodec-dev libavformat-dev libavfilter-dev libswresample-dev`
-  - Note: Without FFmpeg, media I/O returns synthetic data for testing
+- The media modules use NIF-backed implementations for frame reading, filter operations, and transcoding lifecycle management.
 
 ## Opening a Media Source
+
+> **Note:** The media modules use NIF-backed implementations. Transcoding validates codec/container options and manages encoder lifecycle.
 
 ```elixir
 {:ok, src} = ExCubecl.Media.open("input.mp4")
@@ -41,7 +39,7 @@ samples.sample_rate  # 48000
 samples.frames       # 1024
 ```
 
-## Applying GPU Filters
+## Applying Filters
 
 ```elixir
 # Single filter
@@ -90,16 +88,18 @@ samples.frames       # 1024
 {:ok, mono} = ExCubecl.Audio.channels(samples, :stereo, :mono)
 ```
 
-## Transcoding
+## Transcoding API Prototype
+
+The `ExCubecl.Transcode` module validates codec/container options and manages the encoder lifecycle via the NIF.
 
 ```elixir
-# File-to-file
+# File-to-file transcode
 ExCubecl.Transcode.run("input.mp4", "output.mp4",
   video: [codec: :h264, bitrate: "4M", fps: 30],
   audio: [codec: :aac, bitrate: "192k", sample_rate: 48000]
 )
 
-# Frame-by-frame streaming
+# Frame-by-frame streaming encode
 {:ok, enc} = ExCubecl.Transcode.start("output.mp4",
   video: [codec: :h265, width: 1280, height: 720],
   audio: [codec: :aac]
@@ -110,7 +110,7 @@ ExCubecl.Transcode.write_samples(enc, processed_audio)
 ExCubecl.Transcode.finish(enc)
 ```
 
-## Real-time Pipeline (GenServer)
+## Real-time Pipeline Behaviour (Prototype)
 
 ```elixir
 defmodule MyLivestream do
@@ -133,10 +133,9 @@ ExCubecl.MediaPipeline.push_frame(pid, frame)
 ## Architecture
 
 ```
-FFmpeg (Rust)         →  decode raw frames, encode output
-CubeCL GPU kernels    →  all processing in between (filters, mix, effects)
 Elixir               →  orchestration, pipeline composition
+NIF-backed ops       →  media/filter/transcode operations
+Transcode            →  validation + encoder lifecycle via NIF
 ```
 
-Frames flow: FFmpeg decoder → GPU texture → CubeCL kernel → GPU texture → FFmpeg encoder
-without touching Elixir memory.
+Frames flow through: media source → NIF-backed frame data → filter/overlay operations → encoder. The NIF provides the media I/O, processing implementations, and transcoding lifecycle management.

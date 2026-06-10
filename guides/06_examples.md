@@ -2,6 +2,8 @@
 
 ## Basic Buffer Operations
 
+Examples in this guide use the ExCubecl API. Buffers are Rust NIF-managed resource references.
+
 ```elixir
 # Create and inspect
 {:ok, buf} = ExCubecl.buffer([1.0, 2.0, 3.0, 4.0], [4], :f32)
@@ -16,6 +18,8 @@
 ```
 
 ## Image Processing Pipeline
+
+The example below expresses an image-processing pipeline through the API.
 
 ```elixir
 # Load image data (5x5 grayscale)
@@ -39,47 +43,22 @@ pixels = Enum.to_list(10..250//10) |> Enum.take(25)
 
 ## AI Inference Pipeline
 
-```elixir
-# Preprocess: normalize input pixels
-{:ok, input} = ExCubecl.buffer(raw_pixels, [224, 224, 3], :f32)
-{:ok, preprocessed} = ExCubecl.buffer(List.duplicate(0.0, 224 * 224 * 3), [224, 224, 3], :f32)
-{:ok, _cmd1} = ExCubecl.run_kernel("reshape", [input], preprocessed)
-
-# Inference: fully-connected layer via matmul
-{:ok, logits} = ExCubecl.buffer(List.duplicate(0.0, 1000), [1000], :f32)
-{:ok, _cmd2} = ExCubecl.run_kernel("matmul", [preprocessed], logits)
-
-# Post-process: softmax for probabilities
-{:ok, probs} = ExCubecl.buffer(List.duplicate(0.0, 1000), [1000], :f32)
-{:ok, _cmd3} = ExCubecl.run_kernel("softmax", [logits], probs)
-
-# Read predictions
-{:ok, predictions} = ExCubecl.read(probs)
-
-# No manual cleanup needed — buffers are automatically freed when GC'd
-```
-
-## Matrix Operations
+This is an API sketch for inference-style operations using available kernels:
 
 ```elixir
-# Matrix multiply: (2x3) × (3x2) = (2x2)
-{:ok, a} = ExCubecl.buffer([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], [2, 3], :f32)
-{:ok, b} = ExCubecl.buffer([7.0, 8.0, 9.0, 10.0, 11.0, 12.0], [3, 2], :f32)
-{:ok, output} = ExCubecl.buffer(List.duplicate(0.0, 4), [2, 2], :f32)
-
-{:ok, _cmd} = ExCubecl.run_kernel("matmul", [a, b], output)
+# Elementwise operations for preprocessing
+{:ok, input} = ExCubecl.buffer(raw_pixels, [224 * 224 * 3], :f32)
+{:ok, output} = ExCubecl.buffer(List.duplicate(0.0, 224 * 224 * 3), [224 * 224 * 3], :f32)
+{:ok, _cmd} = ExCubecl.run_kernel("elementwise_add", [input, input], output)
 {:ok, result} = ExCubecl.read(output)
-
-# Identity matrix
-{:ok, eye} = ExCubecl.buffer([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], [3, 3], :f32)
-
-# No manual cleanup needed — buffers are automatically freed when GC'd
 ```
 
 ## Async Batch Processing
 
+The async API uses NIF-managed command state with thread-pool execution:
+
 ```elixir
-# Process multiple camera frames concurrently
+# Process multiple frames through async command-style APIs
 cmd_ids =
   for frame <- camera_frames do
     {:ok, input} = ExCubecl.buffer(frame, [1080, 1920], :f32)
@@ -95,7 +74,9 @@ for {cmd_id, _input, _output} <- cmd_ids do
 end
 ```
 
-## Multi-Stage Pipeline with Cleanup
+## Multi-Stage Pipeline
+
+Pipeline orchestration executes kernels through the NIF:
 
 ```elixir
 # Build a 3-stage image processing pipeline
@@ -108,7 +89,7 @@ end
 
 :ok = ExCubecl.pipeline_add(pipeline, "elementwise_add", [input, input], denoised)
 :ok = ExCubecl.pipeline_add(pipeline, "relu", [denoised], edges)
-:ok = ExCubecl.pipeline_add(pipeline, "reduce_sum", [edges], output)
+:ok = ExCubecl.pipeline_add(pipeline, "elementwise_add", [edges], output)
 
 {:ok, _cmd_ids} = ExCubecl.pipeline_run(pipeline)
 
