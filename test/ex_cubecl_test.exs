@@ -8,7 +8,7 @@ defmodule ExCubeclTest do
     end
 
     test "version matches mix.exs" do
-      assert ExCubecl.version() == "0.5.0"
+      assert ExCubecl.version() == "0.7.0"
     end
   end
 
@@ -534,6 +534,7 @@ defmodule ExCubeclTest do
 
   # ── Phase 2: Media I/O ──────────────────────────────────────
 
+  @tag :media
   describe "Media" do
     test "open returns a source reference" do
       {:ok, src} = ExCubecl.Media.open("test.mp4")
@@ -580,6 +581,7 @@ defmodule ExCubeclTest do
 
   # ── Phase 2: Video operations ──────────────────────────────
 
+  @tag :media
   describe "Video" do
     test "overlay returns ok" do
       {:ok, src} = ExCubecl.Media.open("test.mp4")
@@ -636,6 +638,7 @@ defmodule ExCubeclTest do
 
   # ── Phase 2: Audio operations ──────────────────────────────
 
+  @tag :media
   describe "Audio" do
     test "mix returns ok" do
       {:ok, src} = ExCubecl.Media.open("test.mp4")
@@ -674,6 +677,7 @@ defmodule ExCubeclTest do
 
   # ── Phase 2: Filters ───────────────────────────────────────
 
+  @tag :media
   describe "Filter" do
     test "apply video filter returns ok" do
       {:ok, src} = ExCubecl.Media.open("test.mp4")
@@ -711,6 +715,7 @@ defmodule ExCubeclTest do
 
   # ── Phase 2: Transcode ─────────────────────────────────────
 
+  @tag :media
   describe "Transcode" do
     test "start returns an encoder reference" do
       {:ok, enc} =
@@ -786,6 +791,7 @@ defmodule ExCubeclTest do
 
   # ── Phase 2: MediaPipeline ─────────────────────────────────
 
+  @tag :media
   describe "MediaPipeline" do
     test "push_frame sends a message" do
       {:ok, src} = ExCubecl.Media.open("test.mp4")

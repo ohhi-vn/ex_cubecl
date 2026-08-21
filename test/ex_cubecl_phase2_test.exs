@@ -803,6 +803,7 @@ defmodule ExCubeclPhase2Test do
   #  Phase 2 — Video module integration tests
   # ══════════════════════════════════════════════════════════════
 
+  @tag :media
   describe "Video module: overlay with real frame data" do
     test "overlay modifies pixel data" do
       {:ok, src} = ExCubecl.Media.open("test.mp4")
@@ -834,6 +835,7 @@ defmodule ExCubeclPhase2Test do
     end
   end
 
+  @tag :media
   describe "Video module: filter chain produces different output" do
     test "chain of blur then sharpen modifies data" do
       {:ok, src} = ExCubecl.Media.open("test.mp4")
@@ -856,6 +858,7 @@ defmodule ExCubeclPhase2Test do
   #  Phase 2 — Audio module integration tests
   # ══════════════════════════════════════════════════════════════
 
+  @tag :media
   describe "Audio module: mix produces correct output" do
     test "mixing two audio streams produces valid data" do
       {:ok, src} = ExCubecl.Media.open("test.mp4")
@@ -885,6 +888,7 @@ defmodule ExCubeclPhase2Test do
   #  Phase 2 — Transcode integration tests
   # ══════════════════════════════════════════════════════════════
 
+  @tag :media
   describe "Transcode: run/3 full pipeline" do
     test "transcode run opens, processes, and closes" do
       # This tests the full transcode pipeline: open → read frames → encode → close
@@ -934,6 +938,7 @@ defmodule ExCubeclPhase2Test do
   #  Phase 2 — MediaPipeline integration tests
   # ══════════════════════════════════════════════════════════════
 
+  @tag :media
   describe "MediaPipeline: GenServer-based pipeline" do
     test "push_frame delivers frames to the process" do
       {:ok, src} = ExCubecl.Media.open("test.mp4")
@@ -973,6 +978,7 @@ defmodule ExCubeclPhase2Test do
   #  Phase 2 — Error handling and edge cases
   # ══════════════════════════════════════════════════════════════
 
+  @tag :media
   describe "error handling: invalid inputs" do
     test "kernel with empty inputs raises error for binary ops" do
       {:ok, output} = ExCubecl.buffer([0.0], [1], :f32)
@@ -1019,6 +1025,7 @@ defmodule ExCubeclPhase2Test do
     end
   end
 
+  @tag :media
   describe "error handling: invalid parameters" do
     test "transcode with unsupported codec returns error" do
       assert {:error, {:unsupported_codec, :video, :invalid_codec, nil}} =
@@ -1123,6 +1130,7 @@ defmodule ExCubeclPhase2Test do
   #  Phase 2 — Kernel listing completeness
   # ══════════════════════════════════════════════════════════════
 
+  @tag :media
   describe "kernel listing includes all Phase 2 kernels" do
     test "all video kernels are listed" do
       {:ok, kernels} = ExCubecl.kernels()

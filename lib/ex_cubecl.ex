@@ -60,7 +60,7 @@ defmodule ExCubecl do
   alias ExCubecl.NIF
   alias ExCubecl.Command
 
-  @version "0.5.0"
+  @version Mix.Project.config()[:version]
 
   @dtypes ~w(f32 f64 s32 s64 u32 u8)
 

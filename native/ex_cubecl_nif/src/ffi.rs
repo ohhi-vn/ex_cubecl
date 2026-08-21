@@ -82,15 +82,13 @@ pub extern "C" fn ex_cubecl_device_count() -> i32 {
 
 /// Global buffer store for C FFI handles.
 use dashmap::DashMap;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 
-lazy_static! {
-    static ref C_BUFFERS: DashMap<usize, Buffer> = DashMap::new();
-    static ref C_TEXTURES: DashMap<usize, Buffer> = DashMap::new();
-    static ref C_MEDIA: DashMap<usize, media::MediaSource> = DashMap::new();
-    static ref C_NEXT_HANDLE: std::sync::atomic::AtomicUsize =
-        std::sync::atomic::AtomicUsize::new(1_000_000);
-}
+static C_BUFFERS: LazyLock<DashMap<usize, Buffer>> = LazyLock::new(DashMap::new);
+static C_TEXTURES: LazyLock<DashMap<usize, Buffer>> = LazyLock::new(DashMap::new);
+static C_MEDIA: LazyLock<DashMap<usize, media::MediaSource>> = LazyLock::new(DashMap::new);
+static C_NEXT_HANDLE: LazyLock<std::sync::atomic::AtomicUsize> =
+    LazyLock::new(|| std::sync::atomic::AtomicUsize::new(1_000_000));
 
 fn alloc_c_handle() -> usize {
     C_NEXT_HANDLE.fetch_add(1, Ordering::SeqCst)
@@ -376,12 +374,12 @@ pub unsafe extern "C" fn ex_cubecl_kernel_run(
             let input = &input_data[0];
             let mut out = vec![0u8; input.len()];
             let radius = 1usize;
-            for i in 0..input.len() {
+            for (i, o) in out.iter_mut().enumerate() {
                 let start = i.saturating_sub(radius);
                 let end = (i + radius + 1).min(input.len());
                 let count = end - start;
                 let sum: usize = input[start..end].iter().map(|&v| v as usize).sum();
-                out[i] = (sum / count) as u8;
+                *o = (sum / count) as u8;
             }
             out
         }
@@ -694,9 +692,10 @@ pub extern "C" fn ex_cubecl_texture_free(texture: usize) -> i32 {
 
 // ── Phase 2 — Media Source ──────────────────────────────────
 
+#[allow(dead_code)]
 mod media {
     use crate::atoms;
-    use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
+    use rustler::{Encoder, Env, NifResult, ResourceArc, Term};
 
     #[derive(Debug, Clone)]
     pub struct MediaSource {
@@ -759,48 +758,35 @@ mod media {
         let mut stream_terms = Vec::new();
         for s in &source.streams {
             let map = rustler::types::map::map_new(env);
-            let map = map
-                .map_put(atoms::index().encode(env), s.index.encode(env))
-                .map_err(|e| e)?;
+            let map = map.map_put(atoms::index().encode(env), s.index.encode(env))?;
             let type_atom = match s.stream_type {
                 StreamType::Video => atoms::video(),
                 StreamType::Audio => atoms::audio(),
             };
-            let map = map
-                .map_put(
-                    rustler::Atom::from_str(env, "type").unwrap().encode(env),
-                    type_atom.encode(env),
-                )
-                .map_err(|e| e)?;
-            let map = map
-                .map_put(atoms::codec().encode(env), s.codec.as_str().encode(env))
-                .map_err(|e| e)?;
+            let map = map.map_put(
+                rustler::Atom::from_str(env, "type").unwrap().encode(env),
+                type_atom.encode(env),
+            )?;
+            let map = map.map_put(atoms::codec().encode(env), s.codec.as_str().encode(env))?;
             let map = match s.stream_type {
                 StreamType::Video => {
-                    let map = map
-                        .map_put(atoms::width().encode(env), s.width.unwrap_or(0).encode(env))
-                        .map_err(|e| e)?;
-                    let map = map
-                        .map_put(
-                            atoms::height().encode(env),
-                            s.height.unwrap_or(0).encode(env),
-                        )
-                        .map_err(|e| e)?;
-                    map.map_put(atoms::fps().encode(env), s.fps.unwrap_or(0.0).encode(env))
-                        .map_err(|e| e)?
+                    let map =
+                        map.map_put(atoms::width().encode(env), s.width.unwrap_or(0).encode(env))?;
+                    let map = map.map_put(
+                        atoms::height().encode(env),
+                        s.height.unwrap_or(0).encode(env),
+                    )?;
+                    map.map_put(atoms::fps().encode(env), s.fps.unwrap_or(0.0).encode(env))?
                 }
                 StreamType::Audio => {
-                    let map = map
-                        .map_put(
-                            atoms::sample_rate().encode(env),
-                            s.sample_rate.unwrap_or(0).encode(env),
-                        )
-                        .map_err(|e| e)?;
+                    let map = map.map_put(
+                        atoms::sample_rate().encode(env),
+                        s.sample_rate.unwrap_or(0).encode(env),
+                    )?;
                     map.map_put(
                         atoms::channels().encode(env),
                         s.channels.unwrap_or(0).encode(env),
-                    )
-                    .map_err(|e| e)?
+                    )?
                 }
             };
             stream_terms.push(map.encode(env));
@@ -828,27 +814,15 @@ mod media {
         let resource = ResourceArc::<Buffer>::new(buffer);
 
         let frame_map = rustler::types::map::map_new(env);
-        let frame_map = frame_map
-            .map_put(atoms::handle().encode(env), resource.encode(env))
-            .map_err(|e| e)?;
-        let frame_map = frame_map
-            .map_put(atoms::width().encode(env), 1920u32.encode(env))
-            .map_err(|e| e)?;
-        let frame_map = frame_map
-            .map_put(atoms::height().encode(env), 1080u32.encode(env))
-            .map_err(|e| e)?;
-        let frame_map = frame_map
-            .map_put(
-                atoms::format().encode(env),
-                rustler::Atom::from_str(env, "yuv420p").unwrap().encode(env),
-            )
-            .map_err(|e| e)?;
-        let frame_map = frame_map
-            .map_put(atoms::pts().encode(env), 0u64.encode(env))
-            .map_err(|e| e)?;
-        let frame_map = frame_map
-            .map_put(atoms::duration().encode(env), 33333u64.encode(env))
-            .map_err(|e| e)?;
+        let frame_map = frame_map.map_put(atoms::handle().encode(env), resource.encode(env))?;
+        let frame_map = frame_map.map_put(atoms::width().encode(env), 1920u32.encode(env))?;
+        let frame_map = frame_map.map_put(atoms::height().encode(env), 1080u32.encode(env))?;
+        let frame_map = frame_map.map_put(
+            atoms::format().encode(env),
+            rustler::Atom::from_str(env, "yuv420p").unwrap().encode(env),
+        )?;
+        let frame_map = frame_map.map_put(atoms::pts().encode(env), 0u64.encode(env))?;
+        let frame_map = frame_map.map_put(atoms::duration().encode(env), 33333u64.encode(env))?;
 
         Ok((atoms::ok(), frame_map.encode(env)).encode(env))
     }
@@ -871,21 +845,14 @@ mod media {
         let resource = ResourceArc::<Buffer>::new(buffer);
 
         let samples_map = rustler::types::map::map_new(env);
-        let samples_map = samples_map
-            .map_put(atoms::handle().encode(env), resource.encode(env))
-            .map_err(|e| e)?;
-        let samples_map = samples_map
-            .map_put(atoms::channels().encode(env), channels.encode(env))
-            .map_err(|e| e)?;
-        let samples_map = samples_map
-            .map_put(atoms::sample_rate().encode(env), 48000u32.encode(env))
-            .map_err(|e| e)?;
-        let samples_map = samples_map
-            .map_put(atoms::frames().encode(env), sample_frames.encode(env))
-            .map_err(|e| e)?;
-        let samples_map = samples_map
-            .map_put(atoms::pts().encode(env), 0u64.encode(env))
-            .map_err(|e| e)?;
+        let samples_map = samples_map.map_put(atoms::handle().encode(env), resource.encode(env))?;
+        let samples_map =
+            samples_map.map_put(atoms::channels().encode(env), channels.encode(env))?;
+        let samples_map =
+            samples_map.map_put(atoms::sample_rate().encode(env), 48000u32.encode(env))?;
+        let samples_map =
+            samples_map.map_put(atoms::frames().encode(env), sample_frames.encode(env))?;
+        let samples_map = samples_map.map_put(atoms::pts().encode(env), 0u64.encode(env))?;
 
         Ok((atoms::ok(), samples_map.encode(env)).encode(env))
     }

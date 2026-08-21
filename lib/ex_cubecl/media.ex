@@ -24,6 +24,19 @@ defmodule ExCubecl.Media do
   alias ExCubecl.VideoFrame
   alias ExCubecl.AudioSamples
 
+  @doc """
+  Returns `true` if media I/O is available in the loaded NIF.
+
+  Media support currently uses CPU stubs; full FFmpeg-backed decoding
+  lands when the `ffmpeg-next` integration is enabled in the NIF.
+  """
+  @spec supported?() :: boolean()
+  def supported? do
+    match?({:ok, _}, NIF.media_open(""))
+  rescue
+    _ -> false
+  end
+
   @type source :: reference()
   @type stream_info :: %{
           index: non_neg_integer(),
@@ -46,9 +59,9 @@ defmodule ExCubecl.Media do
       {:ok, src} = ExCubecl.Media.open("input.mp4")
       {:ok, src} = ExCubecl.Media.open("rtmp://live/stream")
   """
-  @spec open(String.t()) :: {:ok, source()} | {:error, term()}
+  @spec open(String.t()) :: {:ok, source()} | {:error, :media_unsupported | term()}
   def open(path) when is_binary(path) do
-    NIF.media_open(path)
+    unless supported?(), do: {:error, :media_unsupported}, else: NIF.media_open(path)
   end
 
   @doc """

@@ -370,6 +370,7 @@ defmodule ExCubeclEdgeCasesTest do
   #  Media I/O edge cases
   # ─────────────────────────────────────────────────────────────
 
+  @tag :media
   describe "Media edge cases" do
     test "open with URL-like path" do
       {:ok, src} = ExCubecl.Media.open("rtmp://live.example.com/stream/key")
@@ -414,6 +415,7 @@ defmodule ExCubeclEdgeCasesTest do
   #  Video operations edge cases
   # ─────────────────────────────────────────────────────────────
 
+  @tag :media
   describe "Video edge cases" do
     test "overlay with default options" do
       {:ok, src} = ExCubecl.Media.open("test.mp4")
@@ -511,6 +513,7 @@ defmodule ExCubeclEdgeCasesTest do
   #  Audio operations edge cases
   # ─────────────────────────────────────────────────────────────
 
+  @tag :media
   describe "Audio edge cases" do
     test "mix single track" do
       {:ok, src} = ExCubecl.Media.open("test.mp4")
@@ -603,6 +606,7 @@ defmodule ExCubeclEdgeCasesTest do
   #  Filter edge cases
   # ─────────────────────────────────────────────────────────────
 
+  @tag :media
   describe "Filter edge cases" do
     test "all video filters return ok" do
       {:ok, src} = ExCubecl.Media.open("test.mp4")
@@ -695,6 +699,7 @@ defmodule ExCubeclEdgeCasesTest do
   #  Transcode edge cases
   # ─────────────────────────────────────────────────────────────
 
+  @tag :media
   describe "Transcode edge cases" do
     test "start with only video codec" do
       {:ok, enc} = ExCubecl.Transcode.start("out.mp4", video: [codec: :h264])
@@ -827,6 +832,7 @@ defmodule ExCubeclEdgeCasesTest do
   #  MediaPipeline edge cases
   # ─────────────────────────────────────────────────────────────
 
+  @tag :media
   describe "MediaPipeline edge cases" do
     test "push_frame multiple times" do
       {:ok, src} = ExCubecl.Media.open("test.mp4")

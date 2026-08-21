@@ -22,78 +22,80 @@ defmodule ExCubecl.NIF do
 
   use Rustler, otp_app: :ex_cubecl, crate: "ex_cubecl_nif"
 
-  # ── Device ──────────────────────────────────────────────────
+  @type result(t) :: {:ok, t} | {:error, term()}
 
-  @spec device_info() :: dynamic()
+  # ── Device ──────────────────────────────────────────────
+
+  @spec device_info() :: result(map())
   def device_info(), do: nif_error()
-  @spec device_count() :: dynamic()
+  @spec device_count() :: result(non_neg_integer())
   def device_count(), do: nif_error()
 
   # ── Buffer lifecycle ────────────────────────────────────────
 
-  @spec buffer_new(binary(), [non_neg_integer()], String.t()) :: dynamic()
+  @spec buffer_new(binary(), [non_neg_integer()], String.t()) :: result(reference())
   def buffer_new(_data, _shape, _dtype), do: nif_error()
-  @spec buffer_read(reference()) :: dynamic()
+  @spec buffer_read(reference()) :: result(binary())
   def buffer_read(_buffer), do: nif_error()
-  @spec buffer_size(reference()) :: dynamic()
+  @spec buffer_size(reference()) :: result(non_neg_integer())
   def buffer_size(_buffer), do: nif_error()
-  @spec buffer_shape(reference()) :: dynamic()
+  @spec buffer_shape(reference()) :: result([non_neg_integer()])
   def buffer_shape(_buffer), do: nif_error()
-  @spec buffer_dtype(reference()) :: dynamic()
+  @spec buffer_dtype(reference()) :: result(String.t())
   def buffer_dtype(_buffer), do: nif_error()
 
   # ── Kernel execution ────────────────────────────────────────
 
-  @spec kernel_run(String.t(), [reference()], reference(), map()) :: dynamic()
+  @spec kernel_run(String.t(), [reference()], reference(), map()) :: result(non_neg_integer())
   def kernel_run(_name, _inputs, _output, _params), do: nif_error()
-  @spec kernel_list() :: dynamic()
+  @spec kernel_list() :: result([String.t()])
   def kernel_list(), do: nif_error()
 
-  # ── Async commands ──────────────────────────────────────────
+  # ── Async commands ──────────────────────────────────────
 
-  @spec submit(String.t()) :: dynamic()
+  @spec submit(String.t()) :: result(non_neg_integer())
   def submit(_command), do: nif_error()
 
-  @spec poll(non_neg_integer()) :: dynamic()
+  @spec poll(non_neg_integer()) :: result(:completed | :pending | :failed)
   def poll(_command_id), do: nif_error()
-  @spec wait(non_neg_integer()) :: dynamic()
+  @spec wait(non_neg_integer()) :: :ok | {:error, term()}
   def wait(_command_id), do: nif_error()
 
-  # ── Pipelines ───────────────────────────────────────────────
+  # ── Pipelines ──────────────────────────────────────────────
 
-  @spec pipeline_new() :: dynamic()
+  @spec pipeline_new() :: result(non_neg_integer())
   def pipeline_new(), do: nif_error()
 
   @spec pipeline_add(non_neg_integer(), String.t(), [reference()], reference(), map()) ::
-          dynamic()
+          result(non_neg_integer())
   def pipeline_add(_pipeline_id, _name, _inputs, _output, _params), do: nif_error()
-  @spec pipeline_run(non_neg_integer()) :: dynamic()
+  @spec pipeline_run(non_neg_integer()) :: result(non_neg_integer())
   def pipeline_run(_pipeline_id), do: nif_error()
-  @spec pipeline_free(non_neg_integer()) :: dynamic()
+  @spec pipeline_free(non_neg_integer()) :: :ok | {:error, term()}
   def pipeline_free(_pipeline_id), do: nif_error()
 
-  # ── Media I/O ──────────────────────────────────────────────
+  # ── Media I/O ──────────────────────────────────────
 
-  @spec media_open(String.t()) :: dynamic()
+  @spec media_open(String.t()) :: result(reference())
   def media_open(_path), do: nif_error()
-  @spec media_streams(reference()) :: dynamic()
+  @spec media_streams(reference()) :: result(list())
   def media_streams(_source), do: nif_error()
-  @spec media_read_video_frame(reference()) :: dynamic()
+  @spec media_read_video_frame(reference()) :: result(map())
   def media_read_video_frame(_source), do: nif_error()
-  @spec media_read_audio_samples(reference()) :: dynamic()
+  @spec media_read_audio_samples(reference()) :: result(map())
   def media_read_audio_samples(_source), do: nif_error()
-  @spec media_close(reference()) :: dynamic()
+  @spec media_close(reference()) :: :ok | {:error, term()}
   def media_close(_source), do: nif_error()
 
-  # ── Transcode ──────────────────────────────────────────────
+  # ── Transcode ──────────────────────────────────────
 
-  @spec transcode_start(String.t(), map()) :: dynamic()
+  @spec transcode_start(String.t(), map()) :: result(reference())
   def transcode_start(_path, _opts), do: nif_error()
-  @spec transcode_write_video(reference(), reference()) :: dynamic()
+  @spec transcode_write_video(reference(), reference()) :: :ok | {:error, term()}
   def transcode_write_video(_encoder, _frame), do: nif_error()
-  @spec transcode_write_audio(reference(), reference()) :: dynamic()
+  @spec transcode_write_audio(reference(), reference()) :: :ok | {:error, term()}
   def transcode_write_audio(_encoder, _samples), do: nif_error()
-  @spec transcode_finish(reference()) :: dynamic()
+  @spec transcode_finish(reference()) :: result(map())
   def transcode_finish(_encoder), do: nif_error()
 
   # ── Helpers ─────────────────────────────────────────────────

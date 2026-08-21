@@ -43,7 +43,19 @@ defmodule ExCubecl.Transcode do
   @containers ~w(mp4 mkv webm mov ts)
 
   @doc """
-  Transcodes an input file to an output file with the specified options.
+  Returns `true` if transcoding is available in the loaded NIF.
+
+  Transcode support currently uses CPU stubs; full FFmpeg-backed
+  encoding lands when the `ffmpeg-next` integration is enabled in the NIF.
+  """
+  @spec supported?() :: boolean()
+  def supported? do
+    ExCubecl.Media.supported?()
+  rescue
+    _ -> false
+  end
+
+  @doc """
 
   This is a convenience wrapper that opens the input, reads frames, applies
   encoding, and writes the output.
@@ -53,18 +65,22 @@ defmodule ExCubecl.Transcode do
     * `:video` — keyword list with `:codec`, `:bitrate`, `:fps`, `:width`, `:height`
     * `:audio` — keyword list with `:codec`, `:bitrate`, `:sample_rate`
   """
-  @spec run(String.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  @spec run(String.t(), String.t(), keyword()) :: :ok | {:error, :media_unsupported | term()}
   def run(input_path, output_path, opts \\ [])
       when is_binary(input_path) and is_binary(output_path) do
-    video_opts = Keyword.get(opts, :video, [])
-    audio_opts = Keyword.get(opts, :audio, [])
+    unless supported?() do
+      {:error, :media_unsupported}
+    else
+      video_opts = Keyword.get(opts, :video, [])
+      audio_opts = Keyword.get(opts, :audio, [])
 
-    with {:ok, src} <- ExCubecl.Media.open(input_path),
-         {:ok, enc} <- start(output_path, video: video_opts, audio: audio_opts),
-         :ok <- transcode_loop(src, enc),
-         :ok <- finish(enc) do
-      :ok = ExCubecl.Media.close(src)
-      :ok
+      with {:ok, src} <- ExCubecl.Media.open(input_path),
+           {:ok, enc} <- start(output_path, video: video_opts, audio: audio_opts),
+           :ok <- transcode_loop(src, enc),
+           :ok <- finish(enc) do
+        :ok = ExCubecl.Media.close(src)
+        :ok
+      end
     end
   end
 
@@ -79,20 +95,24 @@ defmodule ExCubecl.Transcode do
     * `:video` — keyword list with `:codec`, `:width`, `:height`, `:bitrate`, `:fps`
     * `:audio` — keyword list with `:codec`, `:bitrate`, `:sample_rate`
   """
-  @spec start(String.t(), keyword()) :: {:ok, encoder()} | {:error, term()}
+  @spec start(String.t(), keyword()) :: {:ok, encoder()} | {:error, :media_unsupported | term()}
   def start(output_path, opts \\ []) when is_binary(output_path) do
-    video_opts = Keyword.get(opts, :video, [])
-    audio_opts = Keyword.get(opts, :audio, [])
+    unless supported?() do
+      {:error, :media_unsupported}
+    else
+      video_opts = Keyword.get(opts, :video, [])
+      audio_opts = Keyword.get(opts, :audio, [])
 
-    with :ok <- validate_codec(video_opts[:codec], @video_codecs, :video),
-         :ok <- validate_codec(audio_opts[:codec], @audio_codecs, :audio),
-         :ok <- validate_container(output_path) do
-      opts_map = %{
-        "video" => Map.new(video_opts),
-        "audio" => Map.new(audio_opts)
-      }
+      with :ok <- validate_codec(video_opts[:codec], @video_codecs, :video),
+           :ok <- validate_codec(audio_opts[:codec], @audio_codecs, :audio),
+           :ok <- validate_container(output_path) do
+        opts_map = %{
+          "video" => Map.new(video_opts),
+          "audio" => Map.new(audio_opts)
+        }
 
-      NIF.transcode_start(output_path, opts_map)
+        NIF.transcode_start(output_path, opts_map)
+      end
     end
   end
 

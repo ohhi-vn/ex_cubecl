@@ -120,8 +120,7 @@ pub fn nif_media_streams(env: Env, source: ResourceArc<MediaSource>) -> NifResul
     for s in &source.streams {
         let map = rustler::types::map::map_new(env);
         let map = map
-            .map_put(atoms::index().encode(env), s.index.encode(env))
-            .map_err(|e| e)?;
+            .map_put(atoms::index().encode(env), s.index.encode(env))?;
 
         let type_atom = match s.stream_type {
             StreamType::Video => atoms::video(),
@@ -131,39 +130,32 @@ pub fn nif_media_streams(env: Env, source: ResourceArc<MediaSource>) -> NifResul
             .map_put(
                 rustler::Atom::from_str(env, "type").unwrap().encode(env),
                 type_atom.encode(env),
-            )
-            .map_err(|e| e)?;
+            )?;
 
         let map = map
-            .map_put(atoms::codec().encode(env), s.codec.as_str().encode(env))
-            .map_err(|e| e)?;
+            .map_put(atoms::codec().encode(env), s.codec.as_str().encode(env))?;
 
         let map = match s.stream_type {
             StreamType::Video => {
                 let map = map
-                    .map_put(atoms::width().encode(env), s.width.unwrap_or(0).encode(env))
-                    .map_err(|e| e)?;
+                    .map_put(atoms::width().encode(env), s.width.unwrap_or(0).encode(env))?;
                 let map = map
                     .map_put(
                         atoms::height().encode(env),
                         s.height.unwrap_or(0).encode(env),
-                    )
-                    .map_err(|e| e)?;
-                map.map_put(atoms::fps().encode(env), s.fps.unwrap_or(0.0).encode(env))
-                    .map_err(|e| e)?
+                    )?;
+                map.map_put(atoms::fps().encode(env), s.fps.unwrap_or(0.0).encode(env))?
             }
             StreamType::Audio => {
                 let map = map
                     .map_put(
                         atoms::sample_rate().encode(env),
                         s.sample_rate.unwrap_or(0).encode(env),
-                    )
-                    .map_err(|e| e)?;
+                    )?;
                 map.map_put(
                     atoms::channels().encode(env),
                     s.channels.unwrap_or(0).encode(env),
-                )
-                .map_err(|e| e)?
+                )?
             }
         };
 
@@ -202,26 +194,20 @@ pub fn nif_media_read_video_frame<'a>(
     // Return { :ok, { video_frame_resource, width, height, format, pts, duration } }
     let frame_map = rustler::types::map::map_new(env);
     let frame_map = frame_map
-        .map_put(atoms::handle().encode(env), resource.encode(env))
-        .map_err(|e| e)?;
+        .map_put(atoms::handle().encode(env), resource.encode(env))?;
     let frame_map = frame_map
-        .map_put(atoms::width().encode(env), 1920u32.encode(env))
-        .map_err(|e| e)?;
+        .map_put(atoms::width().encode(env), 1920u32.encode(env))?;
     let frame_map = frame_map
-        .map_put(atoms::height().encode(env), 1080u32.encode(env))
-        .map_err(|e| e)?;
+        .map_put(atoms::height().encode(env), 1080u32.encode(env))?;
     let frame_map = frame_map
         .map_put(
             atoms::format().encode(env),
             rustler::Atom::from_str(env, "yuv420p").unwrap().encode(env),
-        )
-        .map_err(|e| e)?;
+        )?;
     let frame_map = frame_map
-        .map_put(atoms::pts().encode(env), 0u64.encode(env))
-        .map_err(|e| e)?;
+        .map_put(atoms::pts().encode(env), 0u64.encode(env))?;
     let frame_map = frame_map
-        .map_put(atoms::duration().encode(env), 33333u64.encode(env))
-        .map_err(|e| e)?;
+        .map_put(atoms::duration().encode(env), 33333u64.encode(env))?;
 
     Ok((atoms::ok(), frame_map.encode(env)).encode(env))
 }
@@ -252,20 +238,15 @@ pub fn nif_media_read_audio_samples<'a>(
 
     let samples_map = rustler::types::map::map_new(env);
     let samples_map = samples_map
-        .map_put(atoms::handle().encode(env), resource.encode(env))
-        .map_err(|e| e)?;
+        .map_put(atoms::handle().encode(env), resource.encode(env))?;
     let samples_map = samples_map
-        .map_put(atoms::channels().encode(env), channels.encode(env))
-        .map_err(|e| e)?;
+        .map_put(atoms::channels().encode(env), channels.encode(env))?;
     let samples_map = samples_map
-        .map_put(atoms::sample_rate().encode(env), 48000u32.encode(env))
-        .map_err(|e| e)?;
+        .map_put(atoms::sample_rate().encode(env), 48000u32.encode(env))?;
     let samples_map = samples_map
-        .map_put(atoms::frames().encode(env), sample_frames.encode(env))
-        .map_err(|e| e)?;
+        .map_put(atoms::frames().encode(env), sample_frames.encode(env))?;
     let samples_map = samples_map
-        .map_put(atoms::pts().encode(env), 0u64.encode(env))
-        .map_err(|e| e)?;
+        .map_put(atoms::pts().encode(env), 0u64.encode(env))?;
 
     Ok((atoms::ok(), samples_map.encode(env)).encode(env))
 }

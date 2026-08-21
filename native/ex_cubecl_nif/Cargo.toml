@@ -1,6 +1,6 @@
 [package]
 name = "ex_cubecl_nif"
-version = "0.5.0"
+version = "0.7.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "GPU compute runtime for CubeCL via Rust NIFs — media processing extension"
@@ -14,14 +14,13 @@ crate-type = ["cdylib", "staticlib"]
 rustler = "0.37"
 dashmap = "6"
 parking_lot = "0.12"
-lazy_static = "1"
 num_cpus = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # NOTE: CubeCL GPU integration is prepared but commented out until the crate
 # is published with the needed features. Uncomment when ready:
-# cubecl = { version = "0.1", features = ["wgpu"], optional = true }
+# cubecl = { version = "0.10", features = ["wgpu"], default-features = false, optional = true }
 
 # NOTE: FFmpeg media I/O is prepared but commented out until system
 # libraries (libavcodec, libavformat, libavfilter, libswresample >= 6.x)

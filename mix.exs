@@ -37,9 +37,7 @@ defmodule ExCubecl.MixProject do
     [
       {:rustler, "~> 0.37", runtime: false},
       {:jason, "~> 1.4"},
-      {:ex_doc, "~> 0.40", only: :dev, runtime: false},
-      # Optional .cube LUT parser dependency (pure Elixir)
-      {:nimble_parsec, "~> 1.4", optional: true}
+      {:ex_doc, "~> 0.40", only: :dev, runtime: false}
     ]
   end
 
@@ -71,7 +69,6 @@ defmodule ExCubecl.MixProject do
       name: "ex_cubecl",
       files: ~w(
         lib
-        lib/ex_cubecl
         priv
         native/ex_cubecl_nif/Cargo.toml
         native/ex_cubecl_nif/Cargo.lock
@@ -120,11 +117,11 @@ defmodule ExCubecl.MixProject do
         Examples: ~r/examples\/.*\.exs/
       ],
       groups_for_modules: [
-        "Core API Prototype": [ExCubecl],
-        "Media API Prototype": [ExCubecl.Media, ExCubecl.Video, ExCubecl.Audio],
-        "Filter API Prototype": [ExCubecl.Filter],
-        "Transcode API Prototype": [ExCubecl.Transcode],
-        "MediaPipeline API Prototype": [ExCubecl.MediaPipeline],
+        "Core API": [ExCubecl],
+        "Media API": [ExCubecl.Media, ExCubecl.Video, ExCubecl.Audio],
+        "Filter API": [ExCubecl.Filter],
+        "Transcode API": [ExCubecl.Transcode],
+        "MediaPipeline API": [ExCubecl.MediaPipeline],
         Types: [ExCubecl.VideoFrame, ExCubecl.AudioSamples],
         "Pipeline API Prototype": [ExCubecl.Command],
         "NIF Stubs": [ExCubecl.NIF]
